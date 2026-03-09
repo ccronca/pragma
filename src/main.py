@@ -42,22 +42,29 @@ def init_command():
     # Load or create config
     config = _load_config(create_if_not_exists=True)
 
-    # Get or prompt for Gemini API key
-    gemini_key = config.get("api_keys", {}).get("gemini")
-    if not gemini_key or gemini_key == "YOUR_GEMINI_API_KEY":
-        gemini_key = typer.prompt("Enter your Gemini API key")
+    # Validate that required API keys are present in the environment.
+    # Keys are never stored in config.yaml — set them as environment variables.
+    missing = []
+    if not os.getenv("GEMINI_API_KEY"):
+        missing.append("GEMINI_API_KEY")
+    if not os.getenv("GITLAB_PRIVATE_TOKEN"):
+        missing.append("GITLAB_PRIVATE_TOKEN")
 
-    # Get or prompt for GitLab private token
-    gitlab_token = config.get("api_keys", {}).get("gitlab")
-    if not gitlab_token or gitlab_token == "YOUR_GITLAB_PRIVATE_TOKEN":
-        gitlab_token = typer.prompt("Enter your GitLab private token")
+    if missing:
+        typer.echo(
+            "The following environment variables are required but not set:", err=True
+        )
+        for var in missing:
+            typer.echo(f"  {var}", err=True)
+        typer.echo(
+            "\nExport them in your shell or add them to your ~/.env file.", err=True
+        )
+        raise typer.Exit(code=1)
 
-    # Build config structure
-    if "api_keys" not in config:
-        config["api_keys"] = {}
-    config["api_keys"]["gemini"] = gemini_key
-    config["api_keys"]["gitlab"] = gitlab_token
+    typer.echo("  GEMINI_API_KEY found in environment.")
+    typer.echo("  GITLAB_PRIVATE_TOKEN found in environment.")
 
+    # Build config structure — only non-sensitive values go into config.yaml
     if "vector_store" not in config:
         config["vector_store"] = {"type": "chromadb", "path": "./data/chroma_db"}
 
@@ -68,13 +75,13 @@ def init_command():
             "name": "your_repo_name",
         }
 
-    # Save config
+    # Save non-sensitive config only
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         yaml.safe_dump(config, f, indent=2)
 
     typer.echo(f"\nConfiguration saved to {CONFIG_FILE}")
     typer.echo("\nNext steps:")
-    typer.echo("  1. Update repository info in config.yaml")
+    typer.echo("  1. Update repository owner and name in config.yaml")
     typer.echo("  2. Run 'pragma test-connection' to verify GitLab access")
     typer.echo("  3. Run 'pragma index' to index historical MRs")
     typer.echo("  4. Run 'pragma serve' to start the API server")
@@ -92,14 +99,12 @@ def test_connection_command():
     repo_type = repo_config.get("type")
     owner = repo_config.get("owner")
     name = repo_config.get("name")
-    api_keys = config.get("api_keys", {})
 
     if repo_type == "gitlab":
-        gitlab_token = api_keys.get("gitlab")
-        if gitlab_token == "YOUR_GITLAB_PRIVATE_TOKEN" or not gitlab_token:
+        gitlab_token = os.environ.get("GITLAB_PRIVATE_TOKEN")
+        if not gitlab_token:
             typer.echo(
-                "GitLab Private Token not configured. Please run 'pragma init'.",
-                err=True,
+                "GITLAB_PRIVATE_TOKEN environment variable is not set.", err=True
             )
             raise typer.Exit(code=1)
 
@@ -165,16 +170,14 @@ def index_command(
     repo_type = repo_config.get("type")
     owner = repo_config.get("owner")
     name = repo_config.get("name")
-    api_keys = config.get("api_keys", {})
 
     merge_requests = []
 
     if repo_type == "gitlab":
-        gitlab_token = api_keys.get("gitlab")
-        if gitlab_token == "YOUR_GITLAB_PRIVATE_TOKEN" or not gitlab_token:
+        gitlab_token = os.environ.get("GITLAB_PRIVATE_TOKEN")
+        if not gitlab_token:
             typer.echo(
-                "GitLab Private Token not configured. Please run 'pragma init'.",
-                err=True,
+                "GITLAB_PRIVATE_TOKEN environment variable is not set.", err=True
             )
             raise typer.Exit(code=1)
 

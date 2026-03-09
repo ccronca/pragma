@@ -19,12 +19,13 @@ def index_merge_requests(config: dict, merge_requests: list) -> None:
     """
     logger.info("Processing and embedding %d merge requests", len(merge_requests))
 
-    gemini_api_key = config.get("api_keys", {}).get("gemini")
-    if not gemini_api_key or gemini_api_key == "YOUR_GEMINI_API_KEY":
-        raise ValueError("Gemini API key not configured. Please run 'pragma init'.")
+    gemini_api_key = os.environ.get("GEMINI_API_KEY")
+    if not gemini_api_key:
+        raise ValueError("GEMINI_API_KEY environment variable is not set")
 
-    os.environ["GEMINI_API_KEY"] = gemini_api_key
-    embed_model = GoogleGenAIEmbedding(model_name="gemini-embedding-001")
+    embed_model = GoogleGenAIEmbedding(
+        model_name="gemini-embedding-001", api_key=gemini_api_key
+    )
     Settings.embed_model = embed_model
     Settings.text_splitter = SentenceSplitter(chunk_size=2048, chunk_overlap=200)
 

@@ -13,6 +13,7 @@ Endpoints:
 - GET  /stats        - Database statistics
 """
 
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -134,13 +135,13 @@ class PragmaAPI:
             self.load_config()
 
         # Get configuration
-        gemini_api_key = self.config.get("api_keys", {}).get("gemini")
+        gemini_api_key = os.environ.get("GEMINI_API_KEY")
+        if not gemini_api_key:
+            raise ValueError("GEMINI_API_KEY environment variable is not set")
+
         chroma_path = self.config.get("vector_store", {}).get(
             "path", "./data/chroma_db"
         )
-
-        if not gemini_api_key or gemini_api_key == "YOUR_GEMINI_API_KEY":
-            raise ValueError("Gemini API key not configured in config.yaml")
 
         # Resolve chroma_path relative to project root
         if not Path(chroma_path).is_absolute():
