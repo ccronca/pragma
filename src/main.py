@@ -1,11 +1,20 @@
-import typer
-import yaml
-from pathlib import Path
+import logging
 import os
-from adapters.gitlab import GitlabAdapter
-from indexer.core import index_merge_requests
 import subprocess
 import sys
+from pathlib import Path
+
+import typer
+import yaml
+
+from adapters.gitlab import GitlabAdapter
+from indexer.core import index_merge_requests
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 
 app = typer.Typer()
 CONFIG_FILE = Path("config.yaml")
@@ -63,7 +72,7 @@ def init_command():
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         yaml.safe_dump(config, f, indent=2)
 
-    typer.echo(f"\n✓ Configuration saved to {CONFIG_FILE}")
+    typer.echo(f"\nConfiguration saved to {CONFIG_FILE}")
     typer.echo("\nNext steps:")
     typer.echo("  1. Update repository info in config.yaml")
     typer.echo("  2. Run 'pragma test-connection' to verify GitLab access")
@@ -101,10 +110,18 @@ def test_connection_command():
             or "https://gitlab.com"
         )
 
-        adapter = GitlabAdapter(
-            base_url=gitlab_base_url, private_token=gitlab_token, owner=owner, name=name
-        )
-        typer.echo("\n✓ Connection test successful!")
+        try:
+            adapter = GitlabAdapter(
+                base_url=gitlab_base_url,
+                private_token=gitlab_token,
+                owner=owner,
+                name=name,
+            )
+        except RuntimeError as e:
+            typer.echo(str(e), err=True)
+            raise typer.Exit(code=1)
+
+        typer.echo("\nConnection test successful!")
         typer.echo(f"  Project: {adapter.project.name}")
         typer.echo(f"  Description: {adapter.project.description or 'N/A'}")
         typer.echo(f"  Web URL: {adapter.project.web_url}")
@@ -170,21 +187,32 @@ def index_command(
         )
         typer.echo(f"Using GitLab instance: {gitlab_base_url}")
 
-        adapter = GitlabAdapter(
-            base_url=gitlab_base_url, private_token=gitlab_token, owner=owner, name=name
-        )
-        merge_requests = adapter.fetch_mrs(state=state, max_mrs=max_mrs)
-        typer.echo(f"Fetched {len(merge_requests)} Merge Requests.")
+        try:
+            adapter = GitlabAdapter(
+                base_url=gitlab_base_url,
+                private_token=gitlab_token,
+                owner=owner,
+                name=name,
+            )
+            merge_requests = adapter.fetch_mrs(state=state, max_mrs=max_mrs)
+        except RuntimeError as e:
+            typer.echo(str(e), err=True)
+            raise typer.Exit(code=1)
+
+        typer.echo(f"Fetched {len(merge_requests)} merge requests.")
         for mr in merge_requests:
-            typer.echo(f"- MR #{mr['id']}: {mr['title']}")
+            typer.echo(f"  !{mr['id']}: {mr['title']}")
     else:
         typer.echo(
             f"Unknown repository type: {repo_type}. Please check config.yaml", err=True
         )
         raise typer.Exit(code=1)
 
-    # Call the indexing core logic
-    index_merge_requests(config, merge_requests)
+    try:
+        index_merge_requests(config, merge_requests)
+    except ValueError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=1)
 
 
 @app.command(name="serve")
@@ -205,17 +233,16 @@ def serve_command(
 
     Use --host 0.0.0.0 to expose to network (INSECURE without authentication).
     """
-    # Security warning for 0.0.0.0
     if host == "0.0.0.0":
         typer.echo(
-            "⚠️  WARNING: Binding to 0.0.0.0 exposes the API to your network!", err=True
+            "WARNING: Binding to 0.0.0.0 exposes the API to your network!", err=True
         )
         typer.echo(
-            "⚠️  This API has NO authentication and may contain sensitive MR data.",
+            "WARNING: This API has NO authentication and may contain sensitive MR data.",
             err=True,
         )
         typer.echo(
-            "⚠️  Only use 0.0.0.0 if behind a firewall/VPN or on a trusted network.\n",
+            "WARNING: Only use 0.0.0.0 if behind a firewall/VPN or on a trusted network.\n",
             err=True,
         )
 
@@ -252,10 +279,6 @@ def serve_command(
         raise typer.Exit(code=1)
 
 
-if __name__ == "__main__":
-    app()
-
-
 @app.command(name="clear-index")
 def clear_index_command(
     confirm: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
@@ -267,7 +290,7 @@ def clear_index_command(
     """
     if not confirm:
         confirmed = typer.confirm(
-            "⚠️  This will delete ALL indexed MRs from the database. Continue?"
+            "WARNING: This will delete ALL indexed MRs from the database. Continue?"
         )
         if not confirmed:
             typer.echo("Aborted.")
@@ -283,16 +306,14 @@ def clear_index_command(
     db = chromadb.PersistentClient(path=chroma_path)
 
     try:
-        # Delete the collection
         db.delete_collection("pragma_collection")
-        typer.echo("✓ Collection 'pragma_collection' deleted.")
-
-        # Recreate empty collection
         db.create_collection("pragma_collection")
-        typer.echo("✓ Empty collection recreated.")
-
-        typer.echo("\nDatabase cleared successfully.")
-        typer.echo("Run 'pragma index' to re-index MRs with updated metadata.")
+        typer.echo("Database cleared successfully.")
+        typer.echo("Run 'pragma index' to re-index MRs.")
     except Exception as e:
         typer.echo(f"Error clearing database: {e}", err=True)
         raise typer.Exit(code=1)
+
+
+if __name__ == "__main__":
+    app()

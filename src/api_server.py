@@ -2,37 +2,31 @@
 """
 Pragma REST API - Historical MR Context Provider
 
-A simple REST API that exposes the indexed GitLab MR database for semantic search.
-MCP clients (via Python sandbox) can call this API to get historical context.
-
-API Design:
-- Simple REST endpoints with clear documentation
-- OpenAPI/Swagger for discoverability
-- Callable from MCP Python sandbox (like Monty)
+REST API exposing the indexed GitLab MR database for semantic search.
+Any HTTP client (MCP tools, scripts, AI assistants) can query for historical context.
 
 Endpoints:
-- GET  /health                                 - Health check
-- POST /search                                 - Semantic search for similar MRs
-- GET  /mrs/{mr_id}                           - Get details of specific MR
-- GET  /mrs                                    - List all indexed MRs
-- GET  /stats                                  - Database statistics
+- GET  /health       - Health check
+- POST /search       - Semantic search for similar MRs
+- GET  /mrs/{mr_id}  - Get details of specific MR
+- GET  /mrs          - List all indexed MRs
+- GET  /stats        - Database statistics
 """
 
-from typing import Optional, List
-from pydantic import BaseModel, Field
-from fastapi import FastAPI, HTTPException, Query
-from llama_index.core.vector_stores import MetadataFilter, MetadataFilters
-import yaml
+from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi.responses import JSONResponse
+from typing import Optional
 
-# LlamaIndex imports
-from llama_index.core import VectorStoreIndex
-from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
-from llama_index.core import Settings
 import chromadb
 import chromadb.errors
+import yaml
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import JSONResponse
+from llama_index.core import Settings, VectorStoreIndex
+from llama_index.core.vector_stores import MetadataFilter, MetadataFilters
+from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
 from llama_index.vector_stores.chroma import ChromaVectorStore
+from pydantic import BaseModel, Field
 
 
 # Pydantic models for API
@@ -96,18 +90,6 @@ class DatabaseStats(BaseModel):
     unique_mrs: int
     collection_name: str
     vector_store_path: str
-
-
-# FastAPI app
-app = FastAPI(
-    title="Pragma API",
-    description=(
-        "Historical GitLab MR database for context-aware code reviews. "
-        "Search for similar merge requests to provide AI assistants with "
-        "institutional knowledge from past code changes, discussions, and decisions."
-    ),
-    version="1.0.0",
-)
 
 
 class PragmaAPI:
@@ -204,8 +186,25 @@ class PragmaAPI:
         )
 
 
-# Global API instance
 pragma_api = PragmaAPI()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    pragma_api.initialize()
+    yield
+
+
+app = FastAPI(
+    title="Pragma API",
+    description=(
+        "Historical GitLab MR database for context-aware code reviews. "
+        "Search for similar merge requests to provide AI assistants with "
+        "institutional knowledge from past code changes, discussions, and decisions."
+    ),
+    version="1.0.0",
+    lifespan=lifespan,
+)
 
 
 # Exception handler for stale ChromaDB collection references.
@@ -227,12 +226,6 @@ async def chromadb_not_found_handler(request, exc):
 
 
 # API Endpoints
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize the API on startup."""
-    pragma_api.initialize()
 
 
 @app.get("/health")
@@ -269,7 +262,7 @@ async def get_stats():
     )
 
 
-@app.post("/search", response_model=List[MRSearchResult])
+@app.post("/search", response_model=list[MRSearchResult])
 async def search_similar_mrs(request: SearchRequest):
     """
     Search for similar merge requests using semantic search.
@@ -391,7 +384,7 @@ async def get_mr_details(mr_id: int):
     )
 
 
-@app.get("/mrs", response_model=List[MRSummary])
+@app.get("/mrs", response_model=list[MRSummary])
 async def list_indexed_mrs(
     limit: int = Query(
         50, ge=1, le=200, description="Maximum number of unique MRs to return"
