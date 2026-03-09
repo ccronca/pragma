@@ -2,7 +2,14 @@
 
 **Historical GitLab MR Database with Semantic Search API**
 
-Pragma indexes your GitLab merge requests and provides a REST API for AI assistants to query for historical context. Instead of doing code reviews locally, it acts as a **searchable knowledge base** that external tools (Claude Code, Gemini, etc.) can query to get institutional knowledge from past code changes.
+Pragma indexes your GitLab merge requests and provides a REST API and an **MCP server** for AI assistants to query for historical context. Instead of doing code reviews locally, it acts as a **searchable knowledge base** that external tools (Claude Code, Gemini, etc.) can query to get institutional knowledge from past code changes, discussions, and decisions.
+
+Connect Pragma to your AI assistant via MCP and ask questions like:
+
+```
+Search pragma discussions for "authentication strategy" and summarize what
+the team decided in past MRs.
+```
 
 ## Features
 
