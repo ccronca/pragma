@@ -6,12 +6,12 @@ Pragma indexes your GitLab merge requests and provides a REST API for AI assista
 
 ## Features
 
-- 🔍 **Semantic Search**: Find similar historical MRs using vector similarity
-- 📊 **Rich Context**: Indexes titles, descriptions, diffs, and discussions
-- 🚀 **REST API**: Simple HTTP endpoints for external tools
-- 🔒 **Secure by Default**: Localhost-only binding (127.0.0.1)
-- 🛠️ **GitLab Integration**: Fetches MRs via python-gitlab API
-- 💾 **ChromaDB**: Local vector database for fast retrieval
+- **Semantic Search**: Find similar historical MRs using vector similarity
+- **Rich Context**: Indexes titles, descriptions, diffs, and discussions
+- **REST API**: Simple HTTP endpoints for external tools
+- **Secure by Default**: Localhost-only binding (127.0.0.1)
+- **GitLab Integration**: Fetches MRs via python-gitlab API
+- **ChromaDB**: Local vector database for fast retrieval
 
 ## Quick Start
 
@@ -152,15 +152,18 @@ External AI Tool → HTTP API → Vector Search → Historical Context
 
 ## Configuration
 
-Edit `config.yaml`:
+Set credentials as environment variables (never stored in files):
+
+```bash
+export GEMINI_API_KEY=your_gemini_api_key
+export GITLAB_PRIVATE_TOKEN=your_gitlab_token
+```
+
+Edit `config.yaml` for non-sensitive settings:
 
 ```yaml
-api_keys:
-  gemini: YOUR_GEMINI_API_KEY
-  gitlab: YOUR_GITLAB_PRIVATE_TOKEN
-
 gitlab:
-  base_url: https://gitlab.cee.redhat.com  # Optional
+  base_url: https://gitlab.cee.redhat.com  # Optional, defaults to gitlab.com
 
 repository:
   type: gitlab
@@ -174,10 +177,10 @@ vector_store:
 
 ## Security
 
-- ⚠️ **No authentication** - API is unauthenticated
-- 🔒 **Localhost only** - Defaults to 127.0.0.1 for security
-- 📁 **Sensitive data** - MR diffs may contain proprietary code
-- 🚫 **Do not expose** to public networks without firewall/VPN
+- **No authentication** - API is unauthenticated
+- **Localhost only** - Defaults to 127.0.0.1 for security
+- **Sensitive data** - MR diffs may contain proprietary code
+- **Do not expose** to public networks without firewall/VPN
 
 ## Development
 
