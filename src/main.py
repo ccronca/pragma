@@ -42,10 +42,11 @@ def init_command():
     # Load or create config
     config = _load_config(create_if_not_exists=True)
 
-    # Validate that required API keys are present in the environment.
+    # Validate that required environment variables are set.
     # Keys are never stored in config.yaml — set them as environment variables.
     missing = []
-    if not os.getenv("GEMINI_API_KEY"):
+    embedding_provider = config.get("embeddings", {}).get("provider", "gemini")
+    if embedding_provider == "gemini" and not os.getenv("GEMINI_API_KEY"):
         missing.append("GEMINI_API_KEY")
     if not os.getenv("GITLAB_PRIVATE_TOKEN"):
         missing.append("GITLAB_PRIVATE_TOKEN")
@@ -56,12 +57,12 @@ def init_command():
         )
         for var in missing:
             typer.echo(f"  {var}", err=True)
-        typer.echo(
-            "\nExport them in your shell or add them to your ~/.env file.", err=True
-        )
         raise typer.Exit(code=1)
 
-    typer.echo("  GEMINI_API_KEY found in environment.")
+    if embedding_provider == "gemini":
+        typer.echo("  GEMINI_API_KEY found in environment.")
+    else:
+        typer.echo(f"  Embedding provider: {embedding_provider} (no API key required).")
     typer.echo("  GITLAB_PRIVATE_TOKEN found in environment.")
 
     # Build config structure — only non-sensitive values go into config.yaml

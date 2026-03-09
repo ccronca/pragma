@@ -1,11 +1,11 @@
 import logging
-import os
 
 import chromadb
 from llama_index.core import Document, Settings, StorageContext, VectorStoreIndex
 from llama_index.core.node_parser import SentenceSplitter
-from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
 from llama_index.vector_stores.chroma import ChromaVectorStore
+
+from adapters.embeddings import get_embed_model
 
 logger = logging.getLogger(__name__)
 
@@ -19,13 +19,7 @@ def index_merge_requests(config: dict, merge_requests: list) -> None:
     """
     logger.info("Processing and embedding %d merge requests", len(merge_requests))
 
-    gemini_api_key = os.environ.get("GEMINI_API_KEY")
-    if not gemini_api_key:
-        raise ValueError("GEMINI_API_KEY environment variable is not set")
-
-    embed_model = GoogleGenAIEmbedding(
-        model_name="gemini-embedding-001", api_key=gemini_api_key
-    )
+    embed_model = get_embed_model(config)
     Settings.embed_model = embed_model
     Settings.text_splitter = SentenceSplitter(chunk_size=2048, chunk_overlap=200)
 

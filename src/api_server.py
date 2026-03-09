@@ -13,7 +13,6 @@ Endpoints:
 - GET  /stats        - Database statistics
 """
 
-import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -25,9 +24,10 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse
 from llama_index.core import Settings, VectorStoreIndex
 from llama_index.core.vector_stores import MetadataFilter, MetadataFilters
-from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
 from llama_index.vector_stores.chroma import ChromaVectorStore
 from pydantic import BaseModel, Field
+
+from adapters.embeddings import get_embed_model
 
 
 # Pydantic models for API
@@ -134,10 +134,9 @@ class PragmaAPI:
         if self.config is None:
             self.load_config()
 
-        # Get configuration
-        gemini_api_key = os.environ.get("GEMINI_API_KEY")
-        if not gemini_api_key:
-            raise ValueError("GEMINI_API_KEY environment variable is not set")
+        # Initialize embedding model from config
+        embed_model = get_embed_model(self.config)
+        Settings.embed_model = embed_model
 
         chroma_path = self.config.get("vector_store", {}).get(
             "path", "./data/chroma_db"
@@ -145,18 +144,11 @@ class PragmaAPI:
 
         # Resolve chroma_path relative to project root
         if not Path(chroma_path).is_absolute():
-            # Try both current directory and parent directory
             current_dir = Path.cwd()
             if (current_dir / chroma_path).exists():
                 chroma_path = str(current_dir / chroma_path)
             elif (current_dir.parent / chroma_path).exists():
                 chroma_path = str(current_dir.parent / chroma_path)
-
-        # Initialize embedding model
-        embed_model = GoogleGenAIEmbedding(
-            model_name="gemini-embedding-001", api_key=gemini_api_key
-        )
-        Settings.embed_model = embed_model
 
         # Load ChromaDB
         self.chroma_db = chromadb.PersistentClient(path=chroma_path)

@@ -17,6 +17,7 @@ dependencies = [
     "uvicorn>=0.41.0",
     "mcp>=1.26.0",
     "httpx>=0.28.1",
+    "llama-index-embeddings-huggingface>=0.6.1",
 ]
 
 [project.scripts]
