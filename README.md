@@ -152,8 +152,8 @@ See [CLAUDE.md](./CLAUDE.md) for full parameter reference and advanced usage.
 ## Architecture
 
 ```
-GitLab API → Index MRs → Gemini Embeddings → ChromaDB
-                                                  ↓
+GitLab API → Index MRs → Embedding Model → ChromaDB
+                                               ↓
 External AI Tool → HTTP API → Vector Search → Historical Context
 ```
 
@@ -180,7 +180,32 @@ repository:
 vector_store:
   type: chromadb
   path: ./data/chroma_db
+
+# Embedding model configuration
+# Both indexing and search must use the same provider.
+# Switching provider requires re-indexing all MRs.
+embeddings:
+  provider: gemini        # "gemini" (default) or "local"
+  # model: BAAI/bge-large-en-v1.5  # local only, this is the default
 ```
+
+**Gemini provider** (default): requires `GEMINI_API_KEY` in the environment.
+
+**Local provider**: runs on-device using HuggingFace sentence-transformers, no API key or internet access needed at query time. The model is downloaded once on first use and cached locally.
+
+```yaml
+embeddings:
+  provider: local
+  model: BAAI/bge-large-en-v1.5  # ~1.3GB, high quality
+  # model: all-mpnet-base-v2     # ~420MB, good quality
+  # model: all-MiniLM-L6-v2      # ~80MB, fast but lower quality
+```
+
+> When switching providers, clear the existing index and re-index:
+> ```bash
+> uv run pragma clear-index --yes
+> uv run pragma index
+> ```
 
 ## Security
 
@@ -205,8 +230,8 @@ uv add <package-name>
 ## Requirements
 
 - Python 3.10-3.12
-- Gemini API key
 - GitLab private token with API read access
+- Gemini API key (only when using the `gemini` embedding provider)
 - `uv` package manager
 
 ## License
