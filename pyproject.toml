@@ -1,0 +1,35 @@
+[project]
+name = "pragma"
+version = "0.1.0"
+description = "Historical GitLab MR database with semantic search API"
+requires-python = ">=3.10, <3.13"
+dependencies = [
+    "llama-index",
+    "google-generativeai",
+    "chromadb",
+    "python-dotenv",
+    "typer",
+    "PyYAML",
+    "llama-index-embeddings-google-genai",
+    "llama-index-vector-stores-chroma",
+    "python-gitlab>=8.1.0",
+    "fastapi>=0.135.1",
+    "uvicorn>=0.41.0",
+]
+
+[project.scripts]
+pragma = "main:app"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = ["adapters", "indexer"]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.5.1",
+    "ruff>=0.15.5",
+]
