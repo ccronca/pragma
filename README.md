@@ -84,6 +84,64 @@ for mr in similar_mrs:
     print(f"!{mr['mr_id']}: {mr['mr_title']} (score: {mr['similarity_score']:.4f})")
 ```
 
+## MCP Server Integration
+
+Pragma includes an MCP server (`src/mcp_server.py`) exposing three tools:
+
+| Tool | Description |
+|------|-------------|
+| `mcp__pragma__search` | Semantic search over historical MRs |
+| `mcp__pragma__get_mr` | Get full details of a specific MR |
+| `mcp__pragma__list_mrs` | List all indexed MRs |
+
+### Setup
+
+Add to your MCP client configuration (e.g. Claude Code `~/.claude.json`):
+
+```json
+{
+  "mcpServers": {
+    "pragma": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--project", "/path/to/pragma",
+        "python",
+        "/path/to/pragma/src/mcp_server.py"
+      ],
+      "env": {
+        "PRAGMA_API_URL": "http://localhost:8000"
+      }
+    }
+  }
+}
+```
+
+The `--project` flag ensures pragma's virtual environment is used regardless of the current working directory.
+
+### Example Prompts
+
+**Find team decisions about a topic:**
+```
+Search pragma discussions for "API rate limiting strategy" and summarize
+what the team decided in past MRs.
+```
+
+**Review a change with historical context:**
+```
+Before reviewing my change, search pragma for:
+1. Discussions about similar changes to this component
+2. Diffs with similar code patterns
+
+Use both to provide context-aware feedback.
+```
+
+**The two-query pattern** — for the richest context, always make two calls to `search`:
+- `content_type: "discussion"` + natural language query → finds *why* decisions were made
+- `content_type: "diff"` + the actual code diff → finds *how* similar changes were implemented
+
+See [CLAUDE.md](./CLAUDE.md) for full parameter reference and advanced usage.
+
 ## Architecture
 
 ```

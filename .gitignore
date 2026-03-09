@@ -49,6 +49,7 @@ data/
 .pytest_cache/
 .coverage
 htmlcov/
+test_mcp.py
 
 # Distribution / packaging
 *.whl

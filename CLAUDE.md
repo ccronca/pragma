@@ -188,7 +188,7 @@ open http://localhost:8000/docs
 
 ### Using with External AI Tools
 
-External tools (Claude Code, Gemini with Python sandbox) can call the API:
+External tools (Claude Code, Gemini, custom scripts) can call the API:
 
 ```python
 import requests
@@ -232,10 +232,135 @@ uv run pragma serve
 - **Do not expose to public networks** without proper firewall/VPN protection
 - **Use `--host 0.0.0.0` only** on trusted networks or with additional security layers
 
+## MCP Server
+
+Pragma includes an **MCP server** (`src/mcp_server.py`) that exposes the search API as standard MCP tools, compatible with any MCP client (Claude Code, Gemini Code Assist, custom agents).
+
+### Setup
+
+**1. Start the Pragma API server** (must be running before starting the MCP server):
+```bash
+uv run pragma serve
+```
+
+**2. Configure the MCP server in your client** (e.g. Claude Code `~/.claude.json`):
+
+```json
+{
+  "mcpServers": {
+    "pragma": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--project", "/path/to/pragma",
+        "python",
+        "/path/to/pragma/src/mcp_server.py"
+      ],
+      "env": {
+        "PRAGMA_API_URL": "http://localhost:8000"
+      }
+    }
+  }
+}
+```
+
+The `--project` flag ensures pragma's virtual environment is used regardless of the current working directory.
+
+### Available Tools
+
+After connecting, the following tools are available:
+
+| Tool | Description |
+|------|-------------|
+| `mcp__pragma__search` | Semantic search over historical MRs |
+| `mcp__pragma__get_mr` | Get full details of a specific MR by IID |
+| `mcp__pragma__list_mrs` | List all indexed MRs with pagination |
+
+### Tool: `search`
+
+The most important tool. Searches indexed MR content using semantic similarity.
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `query` | string | — | Natural language query. Best for finding discussions and past decisions |
+| `code_diff` | string | — | Unified diff or code snippet. Best for finding similar code patterns |
+| `content_type` | string | — | Restrict to `"discussion"` or `"diff"` |
+| `top_k` | integer | 5 | Number of results to return (1–20) |
+| `min_score` | float | 0.0 | Minimum similarity score threshold (0–1) |
+
+Provide either `query` or `code_diff`, not both.
+
+**When to use `content_type: "discussion"`:**
+
+Use natural language to surface business reasoning, team decisions, and review feedback from past MRs. Best for questions like:
+- "How did the team decide to handle X?"
+- "Was there a discussion about this approach?"
+- "What tradeoffs were considered for Y?"
+
+**When to use `content_type: "diff"`:**
+
+Use a code snippet or unified diff to find similar past implementations. Best for:
+- "Has this pattern been used before?"
+- "How was retry logic implemented in the past?"
+- "Find MRs with similar changes to this file."
+
+**Two-query pattern** — for the richest context, make two calls:
+
+```
+# Call 1: Find team discussions on the topic
+search(query="<natural language description>", content_type="discussion", top_k=5)
+
+# Call 2: Find similar code changes
+search(code_diff="<the actual diff>", content_type="diff", top_k=5)
+```
+
+### Example Queries
+
+**Find past decisions about an architectural topic:**
+```
+Use pragma search to find discussions about "database migration strategy" in past MRs.
+```
+
+**Find how retry logic was implemented before:**
+```
+Search pragma discussions for "retry logic exponential backoff" and also search diffs
+for similar code patterns to what I'm adding.
+```
+
+**Review a code change with historical context:**
+```
+Before reviewing this change, search pragma for:
+1. Discussions about similar changes to this component
+2. Past MRs with similar diff patterns
+
+Use both results to provide context-aware review feedback.
+```
+
+**Explore what MRs are indexed:**
+```
+List the most recent 20 MRs indexed in pragma so I can see what historical
+context is available.
+```
+
+**Drill into a specific MR:**
+```
+Get the full details of pragma MR !383 including its diff and review discussions.
+```
+
+### Tips for Better Results
+
+- **Be specific in queries**: "Jira API pagination with maxResults=False" returns better results than "Jira API"
+- **Use technical terms from the codebase**: The embeddings are trained on your actual MR content, so domain-specific terms work well
+- **Combine both search modes**: Diff search finds *what* was done; discussion search finds *why* it was done
+- **Adjust `min_score`**: Use `0.4`–`0.5` to filter out low-relevance results when results are noisy
+- **Use `get_mr` to go deeper**: When a search result looks relevant, call `get_mr` with its `mr_id` to read the full diff and all discussion threads
+
 ## Future Enhancements
 
-- MCP server integration for direct Claude Code integration
 - Authentication layer for API
 - Incremental indexing (only new MRs)
 - GitHub adapter
 - Filtering by labels, authors, date ranges
+- MCP tools for indexing operations (currently CLI-only)
