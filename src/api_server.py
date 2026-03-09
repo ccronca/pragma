@@ -21,14 +21,17 @@ Endpoints:
 from typing import Optional, List
 from pydantic import BaseModel, Field
 from fastapi import FastAPI, HTTPException, Query
+from llama_index.core.vector_stores import MetadataFilter, MetadataFilters
 import yaml
 from pathlib import Path
+from fastapi.responses import JSONResponse
 
 # LlamaIndex imports
 from llama_index.core import VectorStoreIndex
 from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
 from llama_index.core import Settings
 import chromadb
+import chromadb.errors
 from llama_index.vector_stores.chroma import ChromaVectorStore
 
 
@@ -114,6 +117,7 @@ class PragmaAPI:
         self.config = None
         self.index = None
         self.chroma_collection = None
+        self.chroma_db = None
         self.initialized = False
 
     def load_config(self):
@@ -172,8 +176,10 @@ class PragmaAPI:
         Settings.embed_model = embed_model
 
         # Load ChromaDB
-        db = chromadb.PersistentClient(path=chroma_path)
-        self.chroma_collection = db.get_or_create_collection("pragma_collection")
+        self.chroma_db = chromadb.PersistentClient(path=chroma_path)
+        self.chroma_collection = self.chroma_db.get_or_create_collection(
+            "pragma_collection"
+        )
         vector_store = ChromaVectorStore(chroma_collection=self.chroma_collection)
 
         # Load index
@@ -183,9 +189,41 @@ class PragmaAPI:
 
         self.initialized = True
 
+    def _refresh(self):
+        """Refresh collection and index references after the collection is recreated.
+
+        Called automatically when a NotFoundError is detected, which happens when
+        'pragma clear-index' is run while the server is active.
+        """
+        self.chroma_collection = self.chroma_db.get_or_create_collection(
+            "pragma_collection"
+        )
+        vector_store = ChromaVectorStore(chroma_collection=self.chroma_collection)
+        self.index = VectorStoreIndex.from_vector_store(
+            vector_store=vector_store, embed_model=Settings.embed_model
+        )
+
 
 # Global API instance
 pragma_api = PragmaAPI()
+
+
+# Exception handler for stale ChromaDB collection references.
+# This happens when 'pragma clear-index' is run while the server is active:
+# the collection is deleted and recreated with a new UUID, making the cached
+# reference invalid. Auto-recovery refreshes the reference so the next request succeeds.
+@app.exception_handler(chromadb.errors.NotFoundError)
+async def chromadb_not_found_handler(request, exc):
+    pragma_api._refresh()
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": (
+                "Database collection was reset (likely after 'pragma clear-index'). "
+                "References have been refreshed — please retry your request."
+            )
+        },
+    )
 
 
 # API Endpoints
@@ -273,9 +311,17 @@ async def search_similar_mrs(request: SearchRequest):
     # Use the appropriate query text for the embedding
     query_text = request.query or request.code_diff
 
-    # Fetch more results than needed so we can filter by content_type
-    fetch_k = request.top_k * 3 if request.content_type else request.top_k
-    retriever = pragma_api.index.as_retriever(similarity_top_k=fetch_k)
+    # Push content_type filter into the vector store so retrieval only considers
+    # the requested document type, instead of filtering client-side after retrieval.
+    filters = None
+    if request.content_type:
+        filters = MetadataFilters(
+            filters=[MetadataFilter(key="content_type", value=request.content_type)]
+        )
+
+    retriever = pragma_api.index.as_retriever(
+        similarity_top_k=request.top_k, filters=filters
+    )
     nodes = retriever.retrieve(query_text)
 
     results = []
@@ -285,10 +331,6 @@ async def search_similar_mrs(request: SearchRequest):
 
         metadata = node.metadata or {}
         node_content_type = metadata.get("content_type", "diff")
-
-        # Apply content_type filter if requested
-        if request.content_type and node_content_type != request.content_type:
-            continue
 
         results.append(
             MRSearchResult(
