@@ -52,7 +52,7 @@ class GitlabAdapter:
                 order_by="updated_at",
                 sort="desc",
                 per_page=100,
-                get_all=False,
+                get_all=True,
             )
             mrs = mrs[:max_mrs]
             logger.info("Found %d merge requests to process", len(mrs))
