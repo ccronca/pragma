@@ -227,6 +227,62 @@ uv run pre-commit run --all-files
 uv add <package-name>
 ```
 
+## Systemd User Service (Auto-start on Login)
+
+Run Pragma as a systemd user service that starts automatically on login.
+
+**1. Create the service file** at `~/.config/systemd/user/pragma.service`:
+
+```ini
+[Unit]
+Description=Pragma Historical MR Search API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/YOUR_USERNAME/repositories/github/pragma
+Environment="PATH=/home/YOUR_USERNAME/.local/bin:/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=%h/.config/pragma/env
+ExecStart=/usr/bin/env uv run pragma serve --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
+```
+
+**2. Create the environment file** at `~/.config/pragma/env`:
+
+```bash
+GEMINI_API_KEY=your_gemini_api_key
+GITLAB_PRIVATE_TOKEN=your_gitlab_token
+```
+
+**3. Enable and start:**
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable pragma.service
+systemctl --user start pragma.service
+systemctl --user status pragma.service
+```
+
+**Management commands:**
+
+```bash
+# View logs
+journalctl --user -u pragma.service -f
+
+# Restart
+systemctl --user restart pragma.service
+
+# Stop
+systemctl --user stop pragma.service
+```
+
 ## Requirements
 
 - Python 3.10-3.12
