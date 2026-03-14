@@ -110,16 +110,9 @@ async def fetch_new_mrs(
         owner=repo_owner,
         name=repo_name,
     )
-    mrs = adapter.fetch_mrs(state="merged", max_mrs=50)
 
-    if since:
-        cutoff = datetime.fromisoformat(since.replace("Z", "+00:00"))
-        mrs = [
-            mr
-            for mr in mrs
-            if mr.get("merged_at")
-            and datetime.fromisoformat(mr["merged_at"].replace("Z", "+00:00")) > cutoff
-        ]
+    # Use GitLab's native filtering instead of client-side
+    mrs = adapter.fetch_mrs(state="merged", max_mrs=50, updated_after=since)
 
     logger.info(
         "Fetched %d new MRs from %s/%s (since=%s)",

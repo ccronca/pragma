@@ -31,13 +31,16 @@ class GitlabAdapter:
         except gitlab.exceptions.GitlabGetError as e:
             raise RuntimeError(f"Could not find project '{project_path}': {e}") from e
 
-    def fetch_mrs(self, state: str = "merged", max_mrs: int = 50) -> list[dict]:
+    def fetch_mrs(
+        self, state: str = "merged", max_mrs: int = 50, updated_after: str = None
+    ) -> list[dict]:
         """
         Fetch merge requests from GitLab.
 
         Args:
             state: State of MRs to fetch ('merged', 'opened', 'closed', 'all')
             max_mrs: Maximum number of MRs to fetch
+            updated_after: ISO 8601 timestamp to filter MRs updated after this time
 
         Returns:
             List of dictionaries containing MR data
@@ -47,13 +50,18 @@ class GitlabAdapter:
         )
 
         try:
-            mrs = self.project.mergerequests.list(
-                state=state,
-                order_by="updated_at",
-                sort="desc",
-                per_page=100,
-                get_all=True,
-            )
+            kwargs = {
+                "state": state,
+                "order_by": "updated_at",
+                "sort": "desc",
+                "per_page": 100,
+                "get_all": True,
+            }
+            if updated_after:
+                kwargs["updated_after"] = updated_after
+                logger.info("Filtering MRs updated after %s", updated_after)
+
+            mrs = self.project.mergerequests.list(**kwargs)
             mrs = mrs[:max_mrs]
             logger.info("Found %d merge requests to process", len(mrs))
 

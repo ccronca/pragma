@@ -183,8 +183,8 @@ class TestFetchNewMrs:
     @patch("agents.continuous_indexer.GitlabAdapter")
     async def test_filters_by_since_timestamp(self, mock_adapter_cls):
         mock_adapter = MagicMock()
+        # GitLab API now does the filtering, so mock returns only filtered results
         mock_adapter.fetch_mrs.return_value = [
-            {"id": 1, "merged_at": "2025-01-01T00:00:00Z"},
             {"id": 2, "merged_at": "2025-06-15T00:00:00Z"},
         ]
         mock_adapter_cls.return_value = mock_adapter
@@ -196,15 +196,18 @@ class TestFetchNewMrs:
                 ctx, "group", "repo-a", since="2025-06-01T00:00:00+00:00"
             )
 
+        # Verify fetch_mrs was called with updated_after parameter
+        mock_adapter.fetch_mrs.assert_called_once_with(
+            state="merged", max_mrs=50, updated_after="2025-06-01T00:00:00+00:00"
+        )
         assert len(result) == 1
         assert result[0]["id"] == 2
 
     @patch("agents.continuous_indexer.GitlabAdapter")
     async def test_empty_when_no_new_mrs(self, mock_adapter_cls):
         mock_adapter = MagicMock()
-        mock_adapter.fetch_mrs.return_value = [
-            {"id": 1, "merged_at": "2025-01-01T00:00:00Z"},
-        ]
+        # GitLab API filtering returns empty list when no new MRs
+        mock_adapter.fetch_mrs.return_value = []
         mock_adapter_cls.return_value = mock_adapter
 
         ctx = _make_run_context({"gitlab": {}})
