@@ -55,7 +55,7 @@ def _get_agent() -> Agent:
     global _agent_instance  # noqa: PLW0603
     if _agent_instance is None:
         _agent_instance = Agent(
-            "openai:gpt-4o-mini",
+            "gemini-1.5-flash",
             result_type=IndexingResult,
             system_prompt=_SYSTEM_PROMPT,
         )
