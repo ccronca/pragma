@@ -14,6 +14,16 @@ from indexer.core import index_merge_requests
 
 logger = logging.getLogger(__name__)
 
+
+class RepoConfig(BaseModel):
+    """Repository configuration for indexing."""
+
+    owner: str
+    name: str
+    state: str = "merged"
+    max_mrs: int = 50
+
+
 STATE_FILE = Path("./data/indexing_state.json")
 
 
@@ -50,12 +60,46 @@ _SYSTEM_PROMPT = (
 _agent_instance: Optional[Agent] = None
 
 
-def _get_agent() -> Agent:
+def _get_agent_model(config: dict) -> str:
+    """Determine which agent model to use from config or environment.
+
+    Supported providers:
+    - gemini: Uses Google Gemini models (requires GEMINI_API_KEY)
+    - ollama: Uses local Ollama models (no API key required)
+
+    Priority:
+    1. PRAGMA_AGENT_MODEL environment variable
+    2. config.yaml agent.model setting
+    3. Default based on agent.provider setting
+    4. Fallback to gemini-2.0-flash-thinking-exp-01-21
+    """
+    # Check environment variable first
+    env_model = os.getenv("PRAGMA_AGENT_MODEL")
+    if env_model:
+        return env_model
+
+    # Check config.yaml
+    agent_config = config.get("agent", {})
+    if "model" in agent_config:
+        return agent_config["model"]
+
+    # Infer from provider
+    provider = agent_config.get("provider", "gemini")
+    provider_defaults = {
+        "gemini": "gemini-2.5-flash-lite",
+        "ollama": "llama3",
+    }
+    return provider_defaults.get(provider, "gemini-2.5-flash-lite")
+
+
+def _get_agent(config: dict) -> Agent:
     """Lazily create the agent to avoid API key validation at import time."""
     global _agent_instance  # noqa: PLW0603
     if _agent_instance is None:
+        model = _get_agent_model(config)
+        logger.info("Initializing agent with model: %s", model)
         _agent_instance = Agent(
-            "gemini-1.5-flash",
+            model,
             result_type=IndexingResult,
             system_prompt=_SYSTEM_PROMPT,
         )
@@ -124,12 +168,12 @@ async def fetch_new_mrs(
     return mrs
 
 
-async def index_mrs(ctx: RunContext, repo_configs: list[dict]) -> int:
+async def index_mrs(ctx: RunContext, repo_configs: list[RepoConfig]) -> int:
     """Index the given repository configs into the vector store.
 
     Args:
         ctx: Run context provided by the agent framework.
-        repo_configs: List of repository config dicts with owner, name, etc.
+        repo_configs: List of repository configurations.
 
     Returns:
         Number of repositories successfully processed.
@@ -142,7 +186,10 @@ async def index_mrs(ctx: RunContext, repo_configs: list[dict]) -> int:
         or "https://gitlab.com"
     )
 
-    enhanced_configs = [{**rc, "base_url": base_url} for rc in repo_configs]
+    # Convert Pydantic models to dicts for indexer
+    enhanced_configs = [
+        {**rc.model_dump(), "base_url": base_url} for rc in repo_configs
+    ]
 
     index_merge_requests(config, enhanced_configs)
     return len(enhanced_configs)
@@ -197,7 +244,7 @@ async def run_continuous_indexing(
         logger.info("Checking %d repositories for new MRs...", len(repos))
 
         try:
-            agent = _get_agent()
+            agent = _get_agent(config)
             result = await agent.run(
                 f"Check for new MRs in {len(repos)} repositories and index them. "
                 f"Repositories: {json.dumps([r['owner'] + '/' + r['name'] for r in repos])}",

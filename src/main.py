@@ -121,6 +121,12 @@ def init_command():
     if "vector_store" not in config:
         config["vector_store"] = {"type": "chromadb", "path": "./data/chroma_db"}
 
+    if "agent" not in config:
+        config["agent"] = {
+            "provider": "gemini",
+            "model": "gemini-2.5-flash-lite",
+        }
+
     # Migrate legacy 'repository' to 'repositories' list
     if "repository" in config and "repositories" not in config:
         config["repositories"] = [config.pop("repository")]
