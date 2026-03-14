@@ -55,6 +55,13 @@ class SearchRequest(BaseModel):
     content_type: Optional[str] = Field(
         None, description="Filter by content type: 'diff' or 'discussion'"
     )
+    repository: Optional[str] = Field(
+        None,
+        description=(
+            "Filter results to a specific repository (format: 'owner/name', "
+            "e.g. 'product-security/pdm')"
+        ),
+    )
 
 
 class MRSummary(BaseModel):
@@ -62,6 +69,8 @@ class MRSummary(BaseModel):
 
     mr_id: int
     mr_title: str
+    repo_owner: Optional[str] = None
+    repo_name: Optional[str] = None
     author: Optional[str]
     created_at: Optional[str]
     merged_at: Optional[str]
@@ -84,6 +93,23 @@ class MRDetails(MRSummary):
     full_content: str
 
 
+class RepositoryInfo(BaseModel):
+    """Information about an indexed repository."""
+
+    owner: str
+    name: str
+    full_name: str
+    mr_count: int
+
+
+class RepositoryStats(BaseModel):
+    """Per-repository statistics."""
+
+    full_name: str
+    total_documents: int
+    unique_mrs: int
+
+
 class DatabaseStats(BaseModel):
     """Statistics about the indexed database."""
 
@@ -91,6 +117,7 @@ class DatabaseStats(BaseModel):
     unique_mrs: int
     collection_name: str
     vector_store_path: str
+    per_repository: list[RepositoryStats] = []
 
 
 class PragmaAPI:
@@ -240,10 +267,32 @@ async def get_stats():
     # Get collection info
     count = pragma_api.chroma_collection.count()
 
-    # Count unique MRs
+    # Count unique MRs and build per-repository breakdown
     results = pragma_api.chroma_collection.get(include=["metadatas"])
     metadatas = results.get("metadatas", [])
     unique_mrs = len(set(m.get("mr_id") for m in metadatas if m and m.get("mr_id")))
+
+    repo_docs: dict[str, list[dict]] = {}
+    for m in metadatas:
+        if not m:
+            continue
+        owner = m.get("repo_owner", "")
+        name = m.get("repo_name", "")
+        key = f"{owner}/{name}" if owner or name else ""
+        repo_docs.setdefault(key, []).append(m)
+
+    per_repository = []
+    for full_name, docs in sorted(repo_docs.items()):
+        if not full_name:
+            continue
+        repo_mr_ids = {d.get("mr_id") for d in docs if d.get("mr_id") is not None}
+        per_repository.append(
+            RepositoryStats(
+                full_name=full_name,
+                total_documents=len(docs),
+                unique_mrs=len(repo_mr_ids),
+            )
+        )
 
     return DatabaseStats(
         total_documents=count,
@@ -252,6 +301,7 @@ async def get_stats():
         vector_store_path=pragma_api.config.get("vector_store", {}).get(
             "path", "./data/chroma_db"
         ),
+        per_repository=per_repository,
     )
 
 
@@ -297,13 +347,19 @@ async def search_similar_mrs(request: SearchRequest):
     # Use the appropriate query text for the embedding
     query_text = request.query or request.code_diff
 
-    # Push content_type filter into the vector store so retrieval only considers
-    # the requested document type, instead of filtering client-side after retrieval.
-    filters = None
+    # Push filters into the vector store so retrieval only considers
+    # matching documents, instead of filtering client-side after retrieval.
+    metadata_filters = []
     if request.content_type:
-        filters = MetadataFilters(
-            filters=[MetadataFilter(key="content_type", value=request.content_type)]
+        metadata_filters.append(
+            MetadataFilter(key="content_type", value=request.content_type)
         )
+    if request.repository:
+        parts = request.repository.split("/", 1)
+        if len(parts) == 2:
+            metadata_filters.append(MetadataFilter(key="repo_owner", value=parts[0]))
+            metadata_filters.append(MetadataFilter(key="repo_name", value=parts[1]))
+    filters = MetadataFilters(filters=metadata_filters) if metadata_filters else None
 
     retriever = pragma_api.index.as_retriever(
         similarity_top_k=request.top_k, filters=filters
@@ -322,6 +378,8 @@ async def search_similar_mrs(request: SearchRequest):
             MRSearchResult(
                 mr_id=metadata.get("mr_id", 0),
                 mr_title=metadata.get("mr_title", ""),
+                repo_owner=metadata.get("repo_owner"),
+                repo_name=metadata.get("repo_name"),
                 content_type=node_content_type,
                 mr_description_preview=metadata.get("mr_description", "")[:300],
                 author=metadata.get("author"),
@@ -337,6 +395,43 @@ async def search_similar_mrs(request: SearchRequest):
             break
 
     return results
+
+
+@app.get("/repositories", response_model=list[RepositoryInfo])
+async def list_repositories():
+    """List all indexed repositories with MR counts."""
+    if not pragma_api.initialized:
+        pragma_api.initialize()
+
+    if pragma_api.chroma_collection.count() == 0:
+        return []
+
+    results = pragma_api.chroma_collection.get(include=["metadatas"])
+    metadatas = results.get("metadatas", [])
+
+    # Group by (repo_owner, repo_name) and count unique MRs
+    repo_mrs: dict[tuple[str, str], set] = {}
+    for m in metadatas:
+        if not m:
+            continue
+        owner = m.get("repo_owner", "")
+        name = m.get("repo_name", "")
+        if not owner or not name:
+            continue
+        key = (owner, name)
+        mr_id = m.get("mr_id")
+        if mr_id is not None:
+            repo_mrs.setdefault(key, set()).add(mr_id)
+
+    return [
+        RepositoryInfo(
+            owner=owner,
+            name=name,
+            full_name=f"{owner}/{name}",
+            mr_count=len(mr_ids),
+        )
+        for (owner, name), mr_ids in sorted(repo_mrs.items())
+    ]
 
 
 @app.get("/mrs/{mr_id}", response_model=MRDetails)
@@ -368,6 +463,8 @@ async def get_mr_details(mr_id: int):
     return MRDetails(
         mr_id=metadata.get("mr_id", 0),
         mr_title=metadata.get("mr_title", ""),
+        repo_owner=metadata.get("repo_owner"),
+        repo_name=metadata.get("repo_name"),
         mr_description=metadata.get("mr_description", ""),
         author=metadata.get("author"),
         created_at=metadata.get("created_at"),
@@ -384,6 +481,12 @@ async def list_indexed_mrs(
     ),
     offset: int = Query(
         0, ge=0, description="Offset for pagination (based on unique MRs)"
+    ),
+    repository: Optional[str] = Query(
+        None,
+        description=(
+            "Filter by repository (format: 'owner/name', e.g. 'product-security/pdm')"
+        ),
     ),
 ):
     """
@@ -409,8 +512,22 @@ async def list_indexed_mrs(
     # Multiply by 10 as a heuristic (each MR might have ~10 chunks on average)
     fetch_limit = (limit + offset) * 10
 
+    # Build optional repository filter
+    where_filter = None
+    if repository:
+        parts = repository.split("/", 1)
+        if len(parts) == 2:
+            where_filter = {
+                "$and": [
+                    {"repo_owner": {"$eq": parts[0]}},
+                    {"repo_name": {"$eq": parts[1]}},
+                ]
+            }
+
     # Get documents from ChromaDB
-    results = pragma_api.chroma_collection.get(limit=fetch_limit, include=["metadatas"])
+    results = pragma_api.chroma_collection.get(
+        limit=fetch_limit, include=["metadatas"], where=where_filter
+    )
 
     # Deduplicate by MR ID and collect unique MRs
     seen_mr_ids = set()
@@ -425,6 +542,8 @@ async def list_indexed_mrs(
                 MRSummary(
                     mr_id=mr_id,
                     mr_title=metadata.get("mr_title", ""),
+                    repo_owner=metadata.get("repo_owner"),
+                    repo_name=metadata.get("repo_name"),
                     author=metadata.get("author"),
                     created_at=metadata.get("created_at"),
                     merged_at=metadata.get("merged_at"),

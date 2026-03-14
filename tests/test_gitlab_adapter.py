@@ -81,6 +81,8 @@ class TestFetchMrsOutputShape:
         assert result["description"] == "A description"
         assert result["author"] == "alice"
         assert result["web_url"] == "https://gitlab.example.com/mr/1"
+        assert result["repo_owner"] == "group"
+        assert result["repo_name"] == "repo"
         assert "diff" in result
         assert "discussions" in result
 

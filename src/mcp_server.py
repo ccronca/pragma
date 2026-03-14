@@ -57,6 +57,13 @@ async def list_tools() -> list[Tool]:
                         "description": "Filter by content type: 'diff' or 'discussion'",
                         "enum": ["diff", "discussion"],
                     },
+                    "repository": {
+                        "type": "string",
+                        "description": (
+                            "Filter results to a specific repository "
+                            "(format: 'owner/name', e.g. 'product-security/pdm')"
+                        ),
+                    },
                 },
             },
         ),
@@ -90,7 +97,22 @@ async def list_tools() -> list[Tool]:
                         "description": "Pagination offset",
                         "default": 0,
                     },
+                    "repository": {
+                        "type": "string",
+                        "description": (
+                            "Filter by repository "
+                            "(format: 'owner/name', e.g. 'product-security/pdm')"
+                        ),
+                    },
                 },
+            },
+        ),
+        Tool(
+            name="list_repositories",
+            description="List all indexed repositories with MR counts",
+            inputSchema={
+                "type": "object",
+                "properties": {},
             },
         ),
     ]
@@ -101,26 +123,28 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     """Handle tool calls by routing to the Pragma REST API."""
     async with httpx.AsyncClient() as client:
         if name == "search":
-            response = await client.post(
-                f"{PRAGMA_API_URL}/search",
-                json={
-                    "query": arguments.get("query"),
-                    "code_diff": arguments.get("code_diff"),
-                    "top_k": arguments.get("top_k", 5),
-                    "min_score": arguments.get("min_score", 0.0),
-                    "content_type": arguments.get("content_type"),
-                },
-            )
+            payload = {
+                "query": arguments.get("query"),
+                "code_diff": arguments.get("code_diff"),
+                "top_k": arguments.get("top_k", 5),
+                "min_score": arguments.get("min_score", 0.0),
+                "content_type": arguments.get("content_type"),
+            }
+            if arguments.get("repository"):
+                payload["repository"] = arguments["repository"]
+            response = await client.post(f"{PRAGMA_API_URL}/search", json=payload)
         elif name == "get_mr":
             response = await client.get(f"{PRAGMA_API_URL}/mrs/{arguments['mr_id']}")
         elif name == "list_mrs":
-            response = await client.get(
-                f"{PRAGMA_API_URL}/mrs",
-                params={
-                    "limit": arguments.get("limit", 50),
-                    "offset": arguments.get("offset", 0),
-                },
-            )
+            params = {
+                "limit": arguments.get("limit", 50),
+                "offset": arguments.get("offset", 0),
+            }
+            if arguments.get("repository"):
+                params["repository"] = arguments["repository"]
+            response = await client.get(f"{PRAGMA_API_URL}/mrs", params=params)
+        elif name == "list_repositories":
+            response = await client.get(f"{PRAGMA_API_URL}/repositories")
         else:
             raise ValueError(f"Unknown tool: {name}")
 

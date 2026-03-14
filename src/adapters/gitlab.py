@@ -79,6 +79,8 @@ class GitlabAdapter:
                         "description": mr.description or "",
                         "diff": diff_text,
                         "discussions": self._fetch_discussions(mr_full),
+                        "repo_owner": self.owner,
+                        "repo_name": self.name,
                         "author": mr.author.get("username", "unknown"),
                         "created_at": mr.created_at,
                         "merged_at": mr.merged_at if hasattr(mr, "merged_at") else None,

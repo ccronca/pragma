@@ -32,6 +32,59 @@ def _load_config(create_if_not_exists: bool = False):
         return yaml.safe_load(f)
 
 
+def _get_repositories(config: dict) -> list[dict]:
+    """Extract and validate the repositories list from config.
+
+    Requires 'repositories' to be a non-empty list with valid entries.
+    Each repository must have: type, owner, name.
+    """
+    if "repositories" not in config:
+        typer.echo(
+            "Error: No 'repositories' section found in config.yaml. "
+            "Please run 'pragma init' or add repositories manually.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    repos = config["repositories"]
+    if not isinstance(repos, list) or not repos:
+        typer.echo(
+            "Error: 'repositories' must be a non-empty list in config.yaml.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    for i, repo in enumerate(repos):
+        for field in ("type", "owner", "name"):
+            if not repo.get(field):
+                label = repo.get("alias") or repo.get("name") or f"index {i}"
+                typer.echo(
+                    f"Error: Repository '{label}' is missing required field '{field}'.",
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+    return repos
+
+
+def _get_gitlab_base_url(config: dict) -> str:
+    """Resolve the GitLab base URL from config, environment, or default."""
+    gitlab_config = config.get("gitlab", {})
+    return (
+        gitlab_config.get("base_url")
+        or os.getenv("GITLAB_BASE_URL")
+        or "https://gitlab.com"
+    )
+
+
+def _require_gitlab_token() -> str:
+    """Return the GitLab token or exit with an error."""
+    token = os.environ.get("GITLAB_PRIVATE_TOKEN")
+    if not token:
+        typer.echo("GITLAB_PRIVATE_TOKEN environment variable is not set.", err=True)
+        raise typer.Exit(code=1)
+    return token
+
+
 @app.command(name="init")
 def init_command():
     """
@@ -39,11 +92,9 @@ def init_command():
     """
     typer.echo("Initializing Pragma...")
 
-    # Load or create config
     config = _load_config(create_if_not_exists=True)
 
     # Validate that required environment variables are set.
-    # Keys are never stored in config.yaml — set them as environment variables.
     missing = []
     embedding_provider = config.get("embeddings", {}).get("provider", "gemini")
     if embedding_provider == "gemini" and not os.getenv("GEMINI_API_KEY"):
@@ -65,24 +116,29 @@ def init_command():
         typer.echo(f"  Embedding provider: {embedding_provider} (no API key required).")
     typer.echo("  GITLAB_PRIVATE_TOKEN found in environment.")
 
-    # Build config structure — only non-sensitive values go into config.yaml
     if "vector_store" not in config:
         config["vector_store"] = {"type": "chromadb", "path": "./data/chroma_db"}
 
-    if "repository" not in config:
-        config["repository"] = {
-            "type": "gitlab",
-            "owner": "your_repo_owner",
-            "name": "your_repo_name",
-        }
+    # Migrate legacy 'repository' to 'repositories' list
+    if "repository" in config and "repositories" not in config:
+        config["repositories"] = [config.pop("repository")]
+        typer.echo("\nMigrated 'repository' to 'repositories' list format.")
 
-    # Save non-sensitive config only
+    if "repositories" not in config:
+        config["repositories"] = [
+            {
+                "type": "gitlab",
+                "owner": "your_repo_owner",
+                "name": "your_repo_name",
+            }
+        ]
+
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         yaml.safe_dump(config, f, indent=2)
 
     typer.echo(f"\nConfiguration saved to {CONFIG_FILE}")
     typer.echo("\nNext steps:")
-    typer.echo("  1. Update repository owner and name in config.yaml")
+    typer.echo("  1. Update repository entries in config.yaml")
     typer.echo("  2. Run 'pragma test-connection' to verify GitLab access")
     typer.echo("  3. Run 'pragma index' to index historical MRs")
     typer.echo("  4. Run 'pragma serve' to start the API server")
@@ -91,30 +147,26 @@ def init_command():
 @app.command(name="test-connection")
 def test_connection_command():
     """
-    Test connection to GitLab repository.
+    Test connection to all configured GitLab repositories.
     """
-    typer.echo("Testing connection to GitLab...")
     config = _load_config()
+    repos = _get_repositories(config)
+    gitlab_base_url = _get_gitlab_base_url(config)
+    gitlab_token = _require_gitlab_token()
 
-    repo_config = config.get("repository", {})
-    repo_type = repo_config.get("type")
-    owner = repo_config.get("owner")
-    name = repo_config.get("name")
+    typer.echo(f"Testing connection to {len(repos)} repository(ies)...\n")
 
-    if repo_type == "gitlab":
-        gitlab_token = os.environ.get("GITLAB_PRIVATE_TOKEN")
-        if not gitlab_token:
-            typer.echo(
-                "GITLAB_PRIVATE_TOKEN environment variable is not set.", err=True
-            )
-            raise typer.Exit(code=1)
+    failures = []
+    for repo_config in repos:
+        repo_type = repo_config.get("type")
+        owner = repo_config.get("owner")
+        name = repo_config.get("name")
+        alias = repo_config.get("alias", name)
 
-        gitlab_config = config.get("gitlab", {})
-        gitlab_base_url = (
-            gitlab_config.get("base_url")
-            or os.getenv("GITLAB_BASE_URL")
-            or "https://gitlab.com"
-        )
+        if repo_type != "gitlab":
+            typer.echo(f"[SKIP] {alias}: Unknown repository type '{repo_type}'")
+            failures.append(alias)
+            continue
 
         try:
             adapter = GitlabAdapter(
@@ -123,19 +175,23 @@ def test_connection_command():
                 owner=owner,
                 name=name,
             )
+            typer.echo(f"[OK]   {alias}")
+            typer.echo(f"       Project: {adapter.project.name}")
+            typer.echo(f"       URL: {adapter.project.web_url}")
         except RuntimeError as e:
-            typer.echo(str(e), err=True)
-            raise typer.Exit(code=1)
+            typer.echo(f"[FAIL] {alias}: {e}")
+            failures.append(alias)
 
-        typer.echo("\nConnection test successful!")
-        typer.echo(f"  Project: {adapter.project.name}")
-        typer.echo(f"  Description: {adapter.project.description or 'N/A'}")
-        typer.echo(f"  Web URL: {adapter.project.web_url}")
-    else:
+    typer.echo("")
+    if failures:
         typer.echo(
-            f"Unknown repository type: {repo_type}. Please check config.yaml", err=True
+            f"Connection failed for {len(failures)} repository(ies): "
+            + ", ".join(failures),
+            err=True,
         )
         raise typer.Exit(code=1)
+
+    typer.echo("All connections successful.")
 
 
 @app.command(name="index")
@@ -146,74 +202,68 @@ def index_command(
     state: str = typer.Option(
         "merged", "--state", "-s", help="MR state to fetch (merged|opened|closed|all)"
     ),
+    repository: str = typer.Option(
+        None,
+        "--repository",
+        "-r",
+        help="Index a specific repository (by alias or name). If omitted, indexes all.",
+    ),
 ):
     """
     Index historical merge requests from GitLab.
 
-    By default, indexes the last 50 merged MRs ordered by most recently updated.
-    Use --max-mrs to change the number and --state to filter by MR state.
+    By default, indexes all configured repositories. Use --repository to index
+    a specific one by alias or name.
     """
-    typer.echo("Starting indexing process...")
     config = _load_config()
-    typer.echo("Loaded configuration for indexing:")
-    typer.echo(
-        yaml.safe_dump(
-            {
-                "repository": config.get("repository"),
-                "vector_store": config.get("vector_store"),
-            },
-            indent=2,
-        )
-    )
-    typer.echo(f"\nIndexing parameters: max_mrs={max_mrs}, state={state}\n")
+    repos = _get_repositories(config)
+    gitlab_base_url = _get_gitlab_base_url(config)
+    _require_gitlab_token()  # Validate token is set upfront
 
-    repo_config = config.get("repository", {})
-    repo_type = repo_config.get("type")
-    owner = repo_config.get("owner")
-    name = repo_config.get("name")
-
-    merge_requests = []
-
-    if repo_type == "gitlab":
-        gitlab_token = os.environ.get("GITLAB_PRIVATE_TOKEN")
-        if not gitlab_token:
+    if repository:
+        matched = [
+            r
+            for r in repos
+            if r.get("alias", r["name"]) == repository or r["name"] == repository
+        ]
+        if not matched:
+            available = ", ".join(r.get("alias", r["name"]) for r in repos)
             typer.echo(
-                "GITLAB_PRIVATE_TOKEN environment variable is not set.", err=True
+                f"Repository '{repository}' not found. Available: {available}",
+                err=True,
             )
             raise typer.Exit(code=1)
+        repos = matched
 
-        # Get GitLab base URL from config, environment, or default to gitlab.com
-        gitlab_config = config.get("gitlab", {})
-        gitlab_base_url = (
-            gitlab_config.get("base_url")
-            or os.getenv("GITLAB_BASE_URL")
-            or "https://gitlab.com"
-        )
-        typer.echo(f"Using GitLab instance: {gitlab_base_url}")
+    typer.echo(f"Indexing {len(repos)} repository(ies)...")
+    typer.echo(f"Parameters: max_mrs={max_mrs}, state={state}\n")
 
-        try:
-            adapter = GitlabAdapter(
-                base_url=gitlab_base_url,
-                private_token=gitlab_token,
-                owner=owner,
-                name=name,
+    # Build repo_configs for the indexer
+    repo_configs = []
+    for repo_config in repos:
+        repo_type = repo_config.get("type")
+        if repo_type != "gitlab":
+            alias = repo_config.get("alias", repo_config["name"])
+            typer.echo(
+                f"Skipping '{alias}': Unknown repository type '{repo_type}'", err=True
             )
-            merge_requests = adapter.fetch_mrs(state=state, max_mrs=max_mrs)
-        except RuntimeError as e:
-            typer.echo(str(e), err=True)
-            raise typer.Exit(code=1)
+            continue
 
-        typer.echo(f"Fetched {len(merge_requests)} merge requests.")
-        for mr in merge_requests:
-            typer.echo(f"  !{mr['id']}: {mr['title']}")
-    else:
-        typer.echo(
-            f"Unknown repository type: {repo_type}. Please check config.yaml", err=True
-        )
-        raise typer.Exit(code=1)
+        # Add indexing parameters to repo config
+        enhanced_config = {
+            **repo_config,
+            "base_url": gitlab_base_url,
+            "max_mrs": max_mrs,
+            "state": state,
+        }
+        repo_configs.append(enhanced_config)
+
+    if not repo_configs:
+        typer.echo("\nNo valid repositories to index.")
+        return
 
     try:
-        index_merge_requests(config, merge_requests)
+        index_merge_requests(config, repo_configs)
     except ValueError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(code=1)
@@ -259,7 +309,6 @@ def serve_command(
     typer.echo(f"Auto-reload: {reload}\n")
     typer.echo("Press CTRL+C to stop\n")
 
-    # Run uvicorn
     cmd = [
         sys.executable,
         "-m",

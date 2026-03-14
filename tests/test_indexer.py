@@ -22,6 +22,8 @@ MR_FIXTURE = {
             "created_at": "2024-01-02",
         },
     ],
+    "repo_owner": "group",
+    "repo_name": "repo",
     "author": "alice",
     "created_at": "2024-01-01T00:00:00Z",
     "merged_at": "2024-01-02T00:00:00Z",
@@ -56,6 +58,40 @@ class TestGetIndexedMrIds:
         result = _get_indexed_mr_ids(collection)
         assert result == {10}
 
+    def test_filters_by_repository(self):
+        collection = MagicMock()
+        collection.count.return_value = 3
+        collection.get.return_value = {
+            "metadatas": [
+                {"mr_id": 1, "repo_owner": "group", "repo_name": "repo-a"},
+                {"mr_id": 2, "repo_owner": "group", "repo_name": "repo-a"},
+            ]
+        }
+        result = _get_indexed_mr_ids(collection, repo_owner="group", repo_name="repo-a")
+        assert result == {1, 2}
+        collection.get.assert_called_once_with(
+            include=["metadatas"],
+            where={
+                "$and": [
+                    {"repo_owner": {"$eq": "group"}},
+                    {"repo_name": {"$eq": "repo-a"}},
+                ]
+            },
+        )
+
+    def test_no_filter_returns_all_mr_ids(self):
+        collection = MagicMock()
+        collection.count.return_value = 3
+        collection.get.return_value = {
+            "metadatas": [
+                {"mr_id": 1, "repo_owner": "group", "repo_name": "repo-a"},
+                {"mr_id": 2, "repo_owner": "other", "repo_name": "repo-b"},
+            ]
+        }
+        result = _get_indexed_mr_ids(collection)
+        assert result == {1, 2}
+        collection.get.assert_called_once_with(include=["metadatas"], where=None)
+
 
 class TestBuildDocuments:
     def test_creates_diff_and_discussion_documents(self):
@@ -82,6 +118,8 @@ class TestBuildDocuments:
         for doc in docs:
             assert doc.metadata["mr_id"] == 42
             assert doc.metadata["mr_title"] == "feat: add retry logic"
+            assert doc.metadata["repo_owner"] == "group"
+            assert doc.metadata["repo_name"] == "repo"
             assert doc.metadata["author"] == "alice"
             assert doc.metadata["web_url"] == MR_FIXTURE["web_url"]
 
@@ -109,3 +147,12 @@ class TestBuildDocuments:
         docs = _build_documents([MR_FIXTURE, mr2], already_indexed={42})
         mr_ids = {d.metadata["mr_id"] for d in docs}
         assert mr_ids == {99}
+
+    def test_multi_repo_documents_have_distinct_metadata(self):
+        mr1 = {**MR_FIXTURE, "id": 1, "repo_owner": "team-a", "repo_name": "frontend"}
+        mr2 = {**MR_FIXTURE, "id": 2, "repo_owner": "team-b", "repo_name": "backend"}
+        docs = _build_documents([mr1, mr2], already_indexed=set())
+        owners = {d.metadata["repo_owner"] for d in docs}
+        names = {d.metadata["repo_name"] for d in docs}
+        assert owners == {"team-a", "team-b"}
+        assert names == {"frontend", "backend"}
