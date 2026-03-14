@@ -18,6 +18,7 @@ dependencies = [
     "mcp>=1.26.0",
     "httpx>=0.28.1",
     "llama-index-embeddings-huggingface>=0.6.1",
+    "pydantic-ai>=0.0.30",
 ]
 
 [project.scripts]
@@ -25,7 +26,7 @@ pragma = "main:app"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
-packages = ["adapters", "indexer"]
+packages = ["adapters", "agents", "indexer"]
 
 [build-system]
 requires = ["setuptools>=61.0"]

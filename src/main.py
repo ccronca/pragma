@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import subprocess
@@ -8,6 +9,7 @@ import typer
 import yaml
 
 from adapters.gitlab import GitlabAdapter
+from agents.continuous_indexer import run_continuous_indexing
 from indexer.core import index_merge_requests
 
 logging.basicConfig(
@@ -267,6 +269,42 @@ def index_command(
     except ValueError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(code=1)
+
+
+@app.command(name="watch")
+def watch_command(
+    interval: int = typer.Option(
+        5, "--interval", "-i", help="Polling interval in minutes (default: 5)"
+    ),
+    once: bool = typer.Option(False, "--once", help="Run once and exit (for testing)"),
+):
+    """
+    Monitor GitLab for new merged MRs and automatically index them.
+
+    This command runs continuously, checking for new MRs at the specified
+    interval. Press CTRL+C to stop gracefully.
+    """
+    config = _load_config()
+    repos = _get_repositories(config)
+    _require_gitlab_token()
+
+    typer.echo("=" * 80)
+    typer.echo("PRAGMA CONTINUOUS INDEXING")
+    typer.echo("=" * 80)
+    typer.echo(f"\nMonitoring {len(repos)} repository(ies):")
+    for repo in repos:
+        alias = repo.get("alias", repo["name"])
+        typer.echo(f"  - {alias} ({repo['owner']}/{repo['name']})")
+
+    mode = "once" if once else f"every {interval} minutes"
+    typer.echo(f"\nMode: {mode}")
+    typer.echo("\nPress CTRL+C to stop\n")
+
+    try:
+        asyncio.run(run_continuous_indexing(config, interval, once))
+    except KeyboardInterrupt:
+        typer.echo("\n\nShutting down gracefully...")
+        typer.echo("Continuous indexing stopped.")
 
 
 @app.command(name="serve")
