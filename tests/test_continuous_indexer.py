@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -150,71 +150,50 @@ class TestUpdateState:
 
 
 class TestRunContinuousIndexing:
-    @patch("agents.continuous_indexer.GitlabAdapter")
     @patch("agents.continuous_indexer.index_merge_requests")
     async def test_run_once_exits_after_one_iteration(
-        self, mock_index, mock_adapter_cls, mock_config, temp_state_file
+        self, mock_index, mock_config, temp_state_file
     ):
-        mock_adapter = MagicMock()
-        mock_adapter.fetch_mrs.return_value = []
-        mock_adapter_cls.return_value = mock_adapter
-
         with patch.dict("os.environ", {"GITLAB_PRIVATE_TOKEN": "fake-token"}):
             await run_continuous_indexing(mock_config, run_once=True)
 
-        # Should have checked both repos
-        assert mock_adapter_cls.call_count == 2
-
-    @patch("agents.continuous_indexer.GitlabAdapter")
-    @patch("agents.continuous_indexer.index_merge_requests")
-    async def test_indexes_new_mrs(
-        self, mock_index, mock_adapter_cls, mock_config, temp_state_file
-    ):
-        mock_adapter = MagicMock()
-        mock_adapter.fetch_mrs.return_value = [
-            {"id": 1, "merged_at": "2025-01-01T00:00:00Z"},
-            {"id": 2, "merged_at": "2025-01-02T00:00:00Z"},
-        ]
-        mock_adapter_cls.return_value = mock_adapter
-
-        with patch.dict("os.environ", {"GITLAB_PRIVATE_TOKEN": "fake-token"}):
-            await run_continuous_indexing(mock_config, run_once=True)
-
-        # Should have called index_merge_requests twice (once per repo)
+        # Should have called index_merge_requests once per repo
         assert mock_index.call_count == 2
 
-    @patch("agents.continuous_indexer.GitlabAdapter")
+    @patch("agents.continuous_indexer.index_merge_requests")
+    async def test_indexes_new_mrs(self, mock_index, mock_config, temp_state_file):
+        with patch.dict("os.environ", {"GITLAB_PRIVATE_TOKEN": "fake-token"}):
+            await run_continuous_indexing(mock_config, run_once=True)
+
+        assert mock_index.call_count == 2
+
     @patch("agents.continuous_indexer.index_merge_requests")
     async def test_handles_repository_failure(
-        self, mock_index, mock_adapter_cls, mock_config, temp_state_file
+        self, mock_index, mock_config, temp_state_file
     ):
-        mock_adapter_cls.side_effect = RuntimeError("GitLab error")
+        mock_index.side_effect = RuntimeError("Indexing error")
 
         with patch.dict("os.environ", {"GITLAB_PRIVATE_TOKEN": "fake-token"}):
             await run_continuous_indexing(mock_config, run_once=True)
 
-        # Should have updated state with failures
+        # Should have updated state with failures for both repos
         state = _load_state()
         assert "group/repo-a" in state["repositories"]
         assert state["repositories"]["group/repo-a"]["failure_count"] == 1
 
     @patch("agents.continuous_indexer.asyncio.sleep")
-    @patch("agents.continuous_indexer.GitlabAdapter")
     @patch("agents.continuous_indexer.index_merge_requests")
     async def test_continuous_mode_loops(
-        self, mock_index, mock_adapter_cls, mock_sleep, mock_config, temp_state_file
+        self, mock_index, mock_sleep, mock_config, temp_state_file
     ):
-        mock_adapter = MagicMock()
-        mock_adapter.fetch_mrs.return_value = []
-        mock_adapter_cls.return_value = mock_adapter
         mock_sleep.side_effect = [None, asyncio.CancelledError()]
 
         with pytest.raises(asyncio.CancelledError):
             with patch.dict("os.environ", {"GITLAB_PRIVATE_TOKEN": "fake-token"}):
                 await run_continuous_indexing(mock_config, interval_minutes=1)
 
-        # Should have run twice before cancellation
-        assert mock_adapter_cls.call_count == 4  # 2 repos × 2 iterations
+        # Should have run twice before cancellation (2 repos × 2 iterations)
+        assert mock_index.call_count == 4
         mock_sleep.assert_called_with(60)
 
     async def test_raises_without_gitlab_token(self, mock_config):
@@ -222,12 +201,11 @@ class TestRunContinuousIndexing:
             with pytest.raises(ValueError, match="GITLAB_PRIVATE_TOKEN"):
                 await run_continuous_indexing(mock_config, run_once=True)
 
-    @patch("agents.continuous_indexer.GitlabAdapter")
     @patch("agents.continuous_indexer.index_merge_requests")
-    async def test_uses_last_indexed_timestamp(
-        self, mock_index, mock_adapter_cls, mock_config, temp_state_file
+    async def test_passes_updated_after_to_indexer(
+        self, mock_index, mock_config, temp_state_file
     ):
-        # Set up initial state with a timestamp
+        # Set up initial state with a timestamp for repo-a
         initial_state = {
             "repositories": {
                 "group/repo-a": {
@@ -239,16 +217,10 @@ class TestRunContinuousIndexing:
         }
         temp_state_file.write_text(json.dumps(initial_state), encoding="utf-8")
 
-        mock_adapter = MagicMock()
-        mock_adapter.fetch_mrs.return_value = []
-        mock_adapter_cls.return_value = mock_adapter
-
         with patch.dict("os.environ", {"GITLAB_PRIVATE_TOKEN": "fake-token"}):
             await run_continuous_indexing(mock_config, run_once=True)
 
-        # Verify fetch_mrs was called with updated_after parameter for repo-a
-        calls = mock_adapter.fetch_mrs.call_args_list
-        assert any(
-            call[1].get("updated_after") == "2025-06-01T00:00:00+00:00"
-            for call in calls
-        )
+        # Verify updated_after was passed in repo_config for repo-a
+        calls = mock_index.call_args_list
+        repo_a_call = next(call for call in calls if call[0][1][0]["name"] == "repo-a")
+        assert repo_a_call[0][1][0]["updated_after"] == "2025-06-01T00:00:00+00:00"

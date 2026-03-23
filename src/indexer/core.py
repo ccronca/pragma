@@ -89,6 +89,7 @@ def _process_repo(repo_config: dict, config: dict, chroma_collection) -> list[Do
 
     max_mrs = repo_config.get("max_mrs", 50)
     state = repo_config.get("state", "merged")
+    updated_after = repo_config.get("updated_after")
 
     logger.info("Processing repository %s/%s", owner, name)
     adapter = GitlabAdapter(
@@ -97,7 +98,9 @@ def _process_repo(repo_config: dict, config: dict, chroma_collection) -> list[Do
         owner=owner,
         name=name,
     )
-    merge_requests = adapter.fetch_mrs(state=state, max_mrs=max_mrs)
+    merge_requests = adapter.fetch_mrs(
+        state=state, max_mrs=max_mrs, updated_after=updated_after
+    )
     logger.info("Fetched %d MRs from %s/%s", len(merge_requests), owner, name)
 
     already_indexed = _get_indexed_mr_ids(

@@ -227,11 +227,24 @@ uv run pre-commit run --all-files
 uv add <package-name>
 ```
 
-## Systemd User Service (Auto-start on Login)
+## Systemd User Services (Auto-start on Login)
 
-Run Pragma as a systemd user service that starts automatically on login.
+Pragma provides two systemd user services that start automatically on login:
 
-**1. Create the service file** at `~/.config/systemd/user/pragma.service`:
+- **`pragma.service`** - The REST API server
+- **`pragma-indexer.service`** - Continuous MR indexer (checks for new MRs hourly)
+
+### 1. Create the environment file at `~/.config/pragma/env`
+
+```bash
+GEMINI_API_KEY=your_gemini_api_key        # Required for gemini embedding provider
+GITLAB_PRIVATE_TOKEN=your_gitlab_token    # Required for fetching MRs
+
+# Required for self-hosted GitLab with custom CA certificates
+REQUESTS_CA_BUNDLE=/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
+```
+
+### 2. Create the API service at `~/.config/systemd/user/pragma.service`
 
 ```ini
 [Unit]
@@ -254,33 +267,60 @@ StandardError=journal
 WantedBy=default.target
 ```
 
-**2. Create the environment file** at `~/.config/pragma/env`:
+### 3. Create the indexer service at `~/.config/systemd/user/pragma-indexer.service`
 
-```bash
-GEMINI_API_KEY=your_gemini_api_key
-GITLAB_PRIVATE_TOKEN=your_gitlab_token
+```ini
+[Unit]
+Description=Pragma Continuous MR Indexer
+After=network-online.target pragma.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/YOUR_USERNAME/repositories/github/pragma
+Environment="PATH=/home/YOUR_USERNAME/.local/bin:/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=%h/.config/pragma/env
+ExecStart=/usr/bin/env uv run pragma watch --interval 60
+Restart=on-failure
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
 ```
 
-**3. Enable and start:**
+The indexer checks each configured repository every 60 minutes for new merged MRs
+and indexes only those updated since the last run. State is persisted in
+`./data/indexing_state.json`.
+
+### 4. Enable and start both services
 
 ```bash
 systemctl --user daemon-reload
-systemctl --user enable pragma.service
-systemctl --user start pragma.service
-systemctl --user status pragma.service
+
+systemctl --user enable pragma.service pragma-indexer.service
+systemctl --user start pragma.service pragma-indexer.service
+
+systemctl --user status pragma.service pragma-indexer.service
 ```
 
-**Management commands:**
+### Management commands
 
 ```bash
-# View logs
+# View API server logs
 journalctl --user -u pragma.service -f
 
-# Restart
-systemctl --user restart pragma.service
+# View indexer logs
+journalctl --user -u pragma-indexer.service -f
 
-# Stop
+# Restart services
+systemctl --user restart pragma.service
+systemctl --user restart pragma-indexer.service
+
+# Stop services
 systemctl --user stop pragma.service
+systemctl --user stop pragma-indexer.service
 ```
 
 ## Requirements

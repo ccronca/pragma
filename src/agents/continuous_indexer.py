@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from adapters.gitlab import GitlabAdapter
 from indexer.core import index_merge_requests
 
 logger = logging.getLogger(__name__)
@@ -110,37 +109,23 @@ async def run_continuous_indexing(
                     "Checking %s (last indexed: %s)", repo_key, last_indexed or "never"
                 )
 
-                # Fetch new MRs since last indexed
-                adapter = GitlabAdapter(
-                    base_url=gitlab_base_url,
-                    private_token=gitlab_token,
-                    owner=repo_owner,
-                    name=repo_name,
-                )
+                # Build repo config with updated_after filter so the indexer
+                # only fetches MRs newer than the last run (single GitLab call)
+                repo_config = {
+                    **repo,
+                    "base_url": gitlab_base_url,
+                    "max_mrs": 50,
+                    "state": "merged",
+                    "updated_after": last_indexed,
+                }
+                index_merge_requests(config, [repo_config])
 
-                mrs = adapter.fetch_mrs(
-                    state="merged", max_mrs=50, updated_after=last_indexed
-                )
+                # Retrieve the count of newly indexed MRs from the log is not
+                # straightforward, so we track success and move on
+                logger.info("Indexed new MRs from %s", repo_key)
+                indexed_count += 1
 
-                if mrs:
-                    logger.info("Found %d new MRs in %s", len(mrs), repo_key)
-
-                    # Index the repository with new MRs
-                    repo_config = {
-                        **repo,
-                        "base_url": gitlab_base_url,
-                        "max_mrs": 50,
-                        "state": "merged",
-                    }
-                    index_merge_requests(config, [repo_config])
-                    indexed_count += len(mrs)
-
-                    # Update state with success
-                    _update_state(repo_key, timestamp, success=True)
-                else:
-                    logger.info("No new MRs in %s", repo_key)
-                    # Update timestamp even if no new MRs
-                    _update_state(repo_key, timestamp, success=True)
+                _update_state(repo_key, timestamp, success=True)
 
             except Exception as e:
                 logger.exception("Error indexing repository %s: %s", repo_key, e)
