@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -181,6 +182,18 @@ def _save_review(review_text: str, mr: dict, repo_key: str) -> Path:
     return review_path
 
 
+def _notify(title: str, body: str) -> None:
+    """Send a GNOME desktop notification via notify-send. Silently skips if unavailable."""
+    try:
+        subprocess.run(
+            ["notify-send", "--app-name=Pragma", title, body],
+            check=True,
+            capture_output=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        pass
+
+
 async def _query_pragma_context(
     mr_title: str,
     mr_diff: str,
@@ -286,7 +299,12 @@ async def review_mr(mr: dict, config: dict, pragma_url: str) -> Path:
     )
 
     result = await review_agent.run(prompt)
-    return _save_review(result.data, mr, repo_key)
+    review_path = _save_review(result.data, mr, repo_key)
+    _notify(
+        f"Review ready: MR !{mr['id']}",
+        mr["title"],
+    )
+    return review_path
 
 
 async def run_continuous_review(
