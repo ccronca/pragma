@@ -229,22 +229,27 @@ uv add <package-name>
 
 ## Systemd User Services (Auto-start on Login)
 
-Pragma provides two systemd user services that start automatically on login:
+Pragma provides three systemd user services that start automatically on login:
 
-- **`pragma.service`** - The REST API server
+- **`pragma-api.service`** - The REST API server
 - **`pragma-indexer.service`** - Continuous MR indexer (checks for new MRs hourly)
+- **`pragma-reviewer.service`** - Continuous MR reviewer (reviews new open MRs hourly)
 
 ### 1. Create the environment file at `~/.config/pragma/env`
 
 ```bash
-GEMINI_API_KEY=your_gemini_api_key        # Required for gemini embedding provider
+GEMINI_API_KEY=your_gemini_api_key        # Required when using Gemini (embeddings or reviewer)
 GITLAB_PRIVATE_TOKEN=your_gitlab_token    # Required for fetching MRs
 
 # Required for self-hosted GitLab with custom CA certificates
 REQUESTS_CA_BUNDLE=/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
+
+# Required when using Ollama as the reviewer model
+# OPENAI_BASE_URL=http://localhost:11434/v1
+# OPENAI_API_KEY=ollama
 ```
 
-### 2. Create the API service at `~/.config/systemd/user/pragma.service`
+### 2. Create the API service at `~/.config/systemd/user/pragma-api.service`
 
 ```ini
 [Unit]
@@ -272,7 +277,7 @@ WantedBy=default.target
 ```ini
 [Unit]
 Description=Pragma Continuous MR Indexer
-After=network-online.target pragma.service
+After=network-online.target pragma-api.service
 Wants=network-online.target
 
 [Service]
@@ -294,33 +299,65 @@ The indexer checks each configured repository every 60 minutes for new merged MR
 and indexes only those updated since the last run. State is persisted in
 `./data/indexing_state.json`.
 
-### 4. Enable and start both services
+### 4. Create the reviewer service at `~/.config/systemd/user/pragma-reviewer.service`
+
+```ini
+[Unit]
+Description=Pragma Continuous MR Reviewer
+After=network-online.target pragma-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/YOUR_USERNAME/repositories/github/pragma
+Environment="PATH=/home/YOUR_USERNAME/.local/bin:/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=%h/.config/pragma/env
+ExecStart=/usr/bin/env uv run pragma review-watch --interval 60
+Restart=on-failure
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
+```
+
+The reviewer checks for new open MRs every 60 minutes, generates AI reviews using
+the configured model, and saves them as Markdown files to `./data/reviews/`. A GNOME
+desktop notification is sent when each review completes.
+
+### 5. Enable and start all services
 
 ```bash
 systemctl --user daemon-reload
 
-systemctl --user enable pragma.service pragma-indexer.service
-systemctl --user start pragma.service pragma-indexer.service
+systemctl --user enable pragma-api.service pragma-indexer.service pragma-reviewer.service
+systemctl --user start pragma-api.service pragma-indexer.service pragma-reviewer.service
 
-systemctl --user status pragma.service pragma-indexer.service
+systemctl --user status pragma-api.service pragma-indexer.service pragma-reviewer.service
 ```
 
 ### Management commands
 
 ```bash
 # View API server logs
-journalctl --user -u pragma.service -f
+journalctl --user -u pragma-api.service -f
 
 # View indexer logs
 journalctl --user -u pragma-indexer.service -f
 
+# View reviewer logs
+journalctl --user -u pragma-reviewer.service -f
+
 # Restart services
-systemctl --user restart pragma.service
+systemctl --user restart pragma-api.service
 systemctl --user restart pragma-indexer.service
+systemctl --user restart pragma-reviewer.service
 
 # Stop services
-systemctl --user stop pragma.service
+systemctl --user stop pragma-api.service
 systemctl --user stop pragma-indexer.service
+systemctl --user stop pragma-reviewer.service
 ```
 
 ## Requirements
