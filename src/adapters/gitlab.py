@@ -102,6 +102,41 @@ class GitlabAdapter:
         except gitlab.exceptions.GitlabError as e:
             raise RuntimeError(f"Error fetching merge requests: {e}") from e
 
+    def fetch_mr(self, mr_iid: int) -> dict:
+        """Fetch a single merge request by IID.
+
+        Args:
+            mr_iid: The merge request IID (project-scoped number shown in GitLab UI).
+
+        Returns:
+            Dictionary with MR data (same schema as fetch_mrs results).
+        """
+        try:
+            mr_full = self.project.mergerequests.get(mr_iid)
+        except gitlab.exceptions.GitlabGetError as e:
+            raise RuntimeError(f"Could not find MR !{mr_iid}: {e}") from e
+
+        try:
+            changes = mr_full.changes()
+            diff_text = self._format_changes_to_diff(changes)
+        except Exception as e:
+            logger.warning("Could not fetch diff for MR !%s: %s", mr_iid, e)
+            diff_text = ""
+
+        return {
+            "id": mr_full.iid,
+            "title": mr_full.title,
+            "description": mr_full.description or "",
+            "diff": diff_text,
+            "discussions": self._fetch_discussions(mr_full),
+            "repo_owner": self.owner,
+            "repo_name": self.name,
+            "author": mr_full.author.get("username", "unknown"),
+            "created_at": mr_full.created_at,
+            "merged_at": mr_full.merged_at if hasattr(mr_full, "merged_at") else None,
+            "web_url": mr_full.web_url,
+        }
+
     def _format_changes_to_diff(self, changes: dict) -> str:
         """Format GitLab changes API response to unified diff format."""
         diff_parts = []

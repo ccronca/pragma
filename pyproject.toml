@@ -19,6 +19,7 @@ dependencies = [
     "httpx>=0.28.1",
     "llama-index-embeddings-huggingface>=0.6.1",
     "pydantic-ai>=0.0.30",
+    "anyio>=4.0.0",
 ]
 
 [project.scripts]

@@ -5,11 +5,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+import anyio
 import typer
 import yaml
 
 from adapters.gitlab import GitlabAdapter
 from agents.continuous_indexer import run_continuous_indexing
+from agents.mr_reviewer import review_mr, run_continuous_review
 from indexer.core import index_merge_requests
 
 logging.basicConfig(
@@ -311,6 +313,127 @@ def watch_command(
     except KeyboardInterrupt:
         typer.echo("\n\nShutting down gracefully...")
         typer.echo("Continuous indexing stopped.")
+
+
+@app.command(name="review")
+def review_command(
+    mr_id: int = typer.Argument(help="MR IID to review (the number shown in GitLab)"),
+    repository: str = typer.Option(
+        None,
+        "--repo",
+        "-r",
+        help="Repository to review (alias, name, or owner/name). Defaults to first configured repo.",
+    ),
+    pragma_url: str = typer.Option(
+        "http://localhost:8000",
+        "--pragma-url",
+        help="Pragma API URL for historical context",
+    ),
+):
+    """
+    Review a specific merge request by ID.
+
+    Fetches the MR from GitLab, queries Pragma for historical context,
+    generates an AI review, and saves it to data/reviews/.
+    """
+    config = _load_config()
+    repos = _get_repositories(config)
+    gitlab_base_url = _get_gitlab_base_url(config)
+    _require_gitlab_token()
+
+    # Resolve which repository to use
+    if repository:
+        matched = [
+            r
+            for r in repos
+            if r.get("alias", r["name"]) == repository
+            or r["name"] == repository
+            or f"{r['owner']}/{r['name']}" == repository
+        ]
+        if not matched:
+            available = ", ".join(
+                r.get("alias", f"{r['owner']}/{r['name']}") for r in repos
+            )
+            typer.echo(
+                f"Repository '{repository}' not found. Available: {available}",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        repo_config = matched[0]
+    else:
+        repo_config = repos[0]
+
+    repo_owner = repo_config["owner"]
+    repo_name = repo_config["name"]
+    gitlab_token = os.environ["GITLAB_PRIVATE_TOKEN"]
+
+    typer.echo(f"Fetching MR !{mr_id} from {repo_owner}/{repo_name}...")
+    try:
+        adapter = GitlabAdapter(
+            base_url=gitlab_base_url,
+            private_token=gitlab_token,
+            owner=repo_owner,
+            name=repo_name,
+        )
+        mr = adapter.fetch_mr(mr_id)
+    except RuntimeError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=1)
+
+    typer.echo(f"Reviewing: {mr['title']}")
+    typer.echo(f"Pragma API: {pragma_url}\n")
+
+    try:
+        review_path = anyio.run(review_mr, mr, config, pragma_url)
+        typer.echo(f"Review saved to: {review_path}")
+    except Exception as e:
+        typer.echo(f"Error generating review: {e}", err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="review-watch")
+def review_watch_command(
+    interval: int = typer.Option(
+        60, "--interval", "-i", help="Polling interval in minutes (default: 60)"
+    ),
+    once: bool = typer.Option(False, "--once", help="Run once and exit (for testing)"),
+    pragma_url: str = typer.Option(
+        "http://localhost:8000",
+        "--pragma-url",
+        help="Pragma API URL for historical context",
+    ),
+):
+    """
+    Monitor GitLab for new open MRs and generate AI code reviews.
+
+    Reviews are saved to data/reviews/ as Markdown files, one per MR.
+    The Pragma API is queried for historical context (similar past MRs).
+
+    Requires the Pragma API server to be running (pragma serve).
+    """
+    config = _load_config()
+    repos = _get_repositories(config)
+    _require_gitlab_token()
+
+    typer.echo("=" * 80)
+    typer.echo("PRAGMA MR REVIEWER")
+    typer.echo("=" * 80)
+    typer.echo(f"\nMonitoring {len(repos)} repository(ies):")
+    for repo in repos:
+        alias = repo.get("alias", repo["name"])
+        typer.echo(f"  - {alias} ({repo['owner']}/{repo['name']})")
+
+    mode = "once" if once else f"every {interval} minutes"
+    typer.echo(f"\nMode: {mode}")
+    typer.echo("Reviews saved to: data/reviews/")
+    typer.echo(f"Pragma API: {pragma_url}")
+    typer.echo("\nPress CTRL+C to stop\n")
+
+    try:
+        anyio.run(run_continuous_review, config, interval, once, pragma_url)
+    except KeyboardInterrupt:
+        typer.echo("\n\nShutting down gracefully...")
+        typer.echo("MR reviewer stopped.")
 
 
 @app.command(name="serve")
