@@ -115,6 +115,31 @@ def _mark_mr_reviewed(repo_key: str, mr_id: int) -> None:
     _save_review_state(state)
 
 
+def _build_review_agent(config: dict) -> Agent:
+    """Create a pydantic_ai Agent from the agent config section.
+
+    Handles provider-specific setup:
+    - ollama: sets OPENAI_BASE_URL + OPENAI_API_KEY so pydantic_ai can reach Ollama
+    - gemini: prefixes model name with 'google-gla:' as required by pydantic_ai
+    - other: passes model string through as-is
+    """
+    agent_config = config.get("agent", {})
+    provider = agent_config.get("provider", "gemini")
+    model_name = agent_config.get("model", "gemini-2.5-flash-lite")
+
+    if provider == "ollama":
+        base_url = agent_config.get("base_url", "http://localhost:11434/v1")
+        os.environ.setdefault("OPENAI_BASE_URL", base_url)
+        os.environ.setdefault("OPENAI_API_KEY", "ollama")
+        model_str = model_name if ":" in model_name else f"openai:{model_name}"
+    elif provider == "gemini":
+        model_str = f"google-gla:{model_name}"
+    else:
+        model_str = model_name
+
+    return Agent(model_str, result_type=str, system_prompt=_REVIEW_SYSTEM_PROMPT)
+
+
 def _get_gitlab_base_url(config: dict) -> str:
     """Resolve GitLab base URL from config or environment."""
     gitlab_config = config.get("gitlab", {})
@@ -203,19 +228,19 @@ async def _query_pragma_context(
         not isinstance(discussion_response, Exception)
         and discussion_response.status_code == 200
     ):
-        results = discussion_response.json().get("results", [])
+        results = discussion_response.json()
         if results:
             lines.append("### Similar Past Discussions")
             for r in results[:3]:
                 lines.append(
                     f"- **MR !{r['mr_id']}** (score: {r['similarity_score']:.2f}): {r['mr_title']}"
                 )
-                if r.get("text"):
-                    snippet = r["text"][:300].replace("\n", " ")
+                if r.get("content_preview"):
+                    snippet = r["content_preview"][:300].replace("\n", " ")
                     lines.append(f"  > {snippet}...")
 
     if not isinstance(diff_response, Exception) and diff_response.status_code == 200:
-        results = diff_response.json().get("results", [])
+        results = diff_response.json()
         if results:
             lines.append("\n### Similar Past Code Changes")
             for r in results[:3]:
@@ -242,9 +267,7 @@ async def review_mr(mr: dict, config: dict, pragma_url: str) -> Path:
     """
     repo_key = f"{mr['repo_owner']}/{mr['repo_name']}"
 
-    agent_config = config.get("agent", {})
-    model = agent_config.get("model", "gemini-2.5-flash-lite")
-    review_agent = Agent(model, result_type=str, system_prompt=_REVIEW_SYSTEM_PROMPT)
+    review_agent = _build_review_agent(config)
 
     historical_context = await _query_pragma_context(
         mr_title=mr["title"],
