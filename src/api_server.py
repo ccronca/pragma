@@ -245,6 +245,23 @@ async def chromadb_not_found_handler(request, exc):
     )
 
 
+@app.exception_handler(chromadb.errors.InternalError)
+async def chromadb_internal_error_handler(request, exc):
+    # Transient error caused by concurrent indexer write + API read on the same
+    # ChromaDB PersistentClient. The indexer holds a file lock during writes;
+    # the API may still see this if it opened a connection just before the lock
+    # was acquired. Returning 503 signals the client to retry.
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": (
+                "Database is temporarily unavailable (concurrent write in progress). "
+                "Please retry your request in a few seconds."
+            )
+        },
+    )
+
+
 # API Endpoints
 
 

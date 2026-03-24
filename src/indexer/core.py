@@ -1,6 +1,8 @@
 import logging
+from pathlib import Path
 
 import chromadb
+from filelock import FileLock
 from llama_index.core import Document, Settings, StorageContext, VectorStoreIndex
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.vector_stores.chroma import ChromaVectorStore
@@ -8,6 +10,10 @@ from llama_index.vector_stores.chroma import ChromaVectorStore
 from adapters.embeddings import get_embed_model
 
 logger = logging.getLogger(__name__)
+
+# Shared lock file used by the indexer (writer) and API server (reader) to prevent
+# ChromaDB InternalError caused by concurrent multi-process access.
+_CHROMA_LOCK_FILE = Path("./data/chroma.lock")
 
 
 def index_merge_requests(config: dict, repo_configs: list[dict]) -> None:
@@ -28,44 +34,54 @@ def index_merge_requests(config: dict, repo_configs: list[dict]) -> None:
 
     chroma_path = config.get("vector_store", {}).get("path", "./data/chroma_db")
     logger.info("Connecting to ChromaDB at %s", chroma_path)
-    db = chromadb.PersistentClient(path=chroma_path)
-    chroma_collection = db.get_or_create_collection("pragma_collection")
 
-    vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
-    storage_context = StorageContext.from_defaults(vector_store=vector_store)
+    _CHROMA_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    lock = FileLock(_CHROMA_LOCK_FILE, timeout=300)
 
-    all_documents = []
+    with lock:
+        logger.info("Acquired ChromaDB write lock")
+        db = chromadb.PersistentClient(path=chroma_path)
+        chroma_collection = db.get_or_create_collection("pragma_collection")
 
-    for repo_config in repo_configs:
-        try:
-            docs = _process_repo(repo_config, config, chroma_collection)
-            all_documents.extend(docs)
-        except Exception as e:
-            repo_id = f"{repo_config.get('owner', '?')}/{repo_config.get('name', '?')}"
-            logger.error("Failed to process repository %s: %s", repo_id, e)
+        vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
+        storage_context = StorageContext.from_defaults(vector_store=vector_store)
 
-    if not all_documents:
+        all_documents = []
+
+        for repo_config in repo_configs:
+            try:
+                docs = _process_repo(repo_config, config, chroma_collection)
+                all_documents.extend(docs)
+            except Exception as e:
+                repo_id = (
+                    f"{repo_config.get('owner', '?')}/{repo_config.get('name', '?')}"
+                )
+                logger.error("Failed to process repository %s: %s", repo_id, e)
+
+        if not all_documents:
+            logger.info(
+                "No new MRs to index. Total documents in ChromaDB: %d",
+                chroma_collection.count(),
+            )
+            return
+
+        logger.info("Indexing %d documents for new MRs", len(all_documents))
+        VectorStoreIndex.from_documents(
+            all_documents,
+            storage_context=storage_context,
+            embed_model=embed_model,
+            show_progress=True,
+        )
+
+        new_mr_count = len({d.metadata["mr_id"] for d in all_documents})
         logger.info(
-            "No new MRs to index. Total documents in ChromaDB: %d",
+            "Indexed %d new MRs (%d documents). Total in ChromaDB: %d",
+            new_mr_count,
+            len(all_documents),
             chroma_collection.count(),
         )
-        return
 
-    logger.info("Indexing %d documents for new MRs", len(all_documents))
-    VectorStoreIndex.from_documents(
-        all_documents,
-        storage_context=storage_context,
-        embed_model=embed_model,
-        show_progress=True,
-    )
-
-    new_mr_count = len({d.metadata["mr_id"] for d in all_documents})
-    logger.info(
-        "Indexed %d new MRs (%d documents). Total in ChromaDB: %d",
-        new_mr_count,
-        len(all_documents),
-        chroma_collection.count(),
-    )
+    logger.info("Released ChromaDB write lock")
 
 
 def _process_repo(repo_config: dict, config: dict, chroma_collection) -> list[Document]:
