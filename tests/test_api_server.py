@@ -178,3 +178,29 @@ class TestGetMrEndpoint:
         }
         response = test_client.get("/mrs/999")
         assert response.status_code == 404
+
+
+class TestChromaDBErrorHandlers:
+    def test_internal_error_returns_503(self, client):
+        import chromadb.errors
+
+        test_client, mock_api = client
+        mock_api.chroma_collection.count.return_value = 1
+        mock_api.index.as_retriever.side_effect = chromadb.errors.InternalError(
+            "Error finding id"
+        )
+        response = test_client.post("/search", json={"query": "something"})
+        assert response.status_code == 503
+        assert "retry" in response.json()["detail"].lower()
+
+    def test_not_found_error_returns_503_and_refreshes(self, client):
+        import chromadb.errors
+
+        test_client, mock_api = client
+        mock_api.chroma_collection.count.return_value = 1
+        mock_api.index.as_retriever.side_effect = chromadb.errors.NotFoundError(
+            "collection gone"
+        )
+        response = test_client.post("/search", json={"query": "something"})
+        assert response.status_code == 503
+        mock_api._refresh.assert_called_once()

@@ -132,7 +132,9 @@ def _build_review_agent(config: dict) -> Agent:
         base_url = agent_config.get("base_url", "http://localhost:11434/v1")
         os.environ.setdefault("OPENAI_BASE_URL", base_url)
         os.environ.setdefault("OPENAI_API_KEY", "ollama")
-        model_str = model_name if ":" in model_name else f"openai:{model_name}"
+        model_str = (
+            model_name if model_name.startswith("openai:") else f"openai:{model_name}"
+        )
     elif provider == "gemini":
         model_str = f"google-gla:{model_name}"
     else:

@@ -170,6 +170,56 @@ class TestFetchMrsDiscussions:
         assert result["discussions"] == []
 
 
+class TestFetchMr:
+    def test_returns_dict_with_required_keys(self):
+        adapter = _make_adapter()
+        _, mr_full = _make_mr_stub(iid=42, title="fix: something")
+        mr_full.iid = 42
+        mr_full.title = "fix: something"
+        mr_full.description = "desc"
+        mr_full.author = {"username": "bob"}
+        mr_full.created_at = "2024-01-01T00:00:00Z"
+        mr_full.merged_at = "2024-01-02T00:00:00Z"
+        mr_full.web_url = "https://gitlab.example.com/mr/42"
+        adapter.project.mergerequests.get.return_value = mr_full
+
+        result = adapter.fetch_mr(42)
+
+        assert result["id"] == 42
+        assert result["title"] == "fix: something"
+        assert result["author"] == "bob"
+        assert result["repo_owner"] == "group"
+        assert result["repo_name"] == "repo"
+        assert "diff" in result
+        assert "discussions" in result
+
+    def test_not_found_raises_runtime_error(self):
+        adapter = _make_adapter()
+        adapter.project.mergerequests.get.side_effect = (
+            gitlab.exceptions.GitlabGetError("not found")
+        )
+
+        with pytest.raises(RuntimeError, match="Could not find MR"):
+            adapter.fetch_mr(999)
+
+    def test_failed_diff_returns_empty_string(self):
+        adapter = _make_adapter()
+        _, mr_full = _make_mr_stub(iid=1)
+        mr_full.iid = 1
+        mr_full.title = "fix: something"
+        mr_full.description = ""
+        mr_full.author = {"username": "alice"}
+        mr_full.created_at = "2024-01-01T00:00:00Z"
+        mr_full.merged_at = None
+        mr_full.web_url = "https://gitlab.example.com/mr/1"
+        mr_full.changes.side_effect = Exception("API error")
+        adapter.project.mergerequests.get.return_value = mr_full
+
+        result = adapter.fetch_mr(1)
+
+        assert result["diff"] == ""
+
+
 class TestFetchMrsEdgeCases:
     def test_failed_diff_fetch_returns_empty_string(self):
         adapter = _make_adapter()
