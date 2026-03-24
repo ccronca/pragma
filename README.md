@@ -16,7 +16,7 @@ the team decided in past MRs.
 - **Semantic Search**: Find similar historical MRs using vector similarity
 - **Rich Context**: Indexes titles, descriptions, diffs, and discussions
 - **REST API**: Simple HTTP endpoints for external tools
-- **Secure by Default**: Localhost-only binding (127.0.0.1)
+- **AI Code Reviews**: Automated MR reviews using Gemini or Ollama models
 - **GitLab Integration**: Fetches MRs via python-gitlab API
 - **ChromaDB**: Local vector database for fast retrieval
 
@@ -54,10 +54,13 @@ uv run pragma init
 # Test GitLab connection
 uv run pragma test-connection
 
-# Index merge requests
+# Index merge requests (all configured repos)
 uv run pragma index
 
-# Start API server (localhost only, secure)
+# Index a specific repository only
+uv run pragma index --repo pdm-db
+
+# Start API server
 uv run pragma serve
 
 # Start with custom port
@@ -65,6 +68,15 @@ uv run pragma serve --port 8080
 
 # Development mode with auto-reload
 uv run pragma serve --reload
+
+# Review a specific MR by IID
+uv run pragma review 42
+
+# Review an MR from a specific repo (overrides config)
+uv run pragma review 42 --repo pdm-db
+
+# Continuously review new open MRs
+uv run pragma review-watch --interval 60
 ```
 
 ### API Endpoints
@@ -189,7 +201,28 @@ embeddings:
   # model: BAAI/bge-large-en-v1.5  # local only, this is the default
 ```
 
-**Gemini provider** (default): requires `GEMINI_API_KEY` in the environment.
+### Reviewer agent
+
+Configure the AI model used for automated MR reviews:
+
+```yaml
+agent:
+  provider: gemini          # "gemini" (default) or "ollama"
+  model: gemini-2.5-flash   # Gemini model name
+
+  # For Ollama (local models):
+  # provider: ollama
+  # model: mistral:7b        # Ollama model tag; openai: prefix added automatically
+  # base_url: http://localhost:11434/v1  # optional, this is the default
+```
+
+**Gemini**: requires `GEMINI_API_KEY`.
+
+**Ollama**: requires a running Ollama instance. Set `OPENAI_BASE_URL` and `OPENAI_API_KEY=ollama` in the environment file (see systemd section below).
+
+Reviews are saved as Markdown files under `./data/reviews/`.
+
+**Gemini embedding provider** (default): requires `GEMINI_API_KEY` in the environment.
 
 **Local provider**: runs on-device using HuggingFace sentence-transformers, no API key or internet access needed at query time. The model is downloaded once on first use and cached locally.
 
@@ -209,10 +242,7 @@ embeddings:
 
 ## Security
 
-- **No authentication** - API is unauthenticated
-- **Localhost only** - Defaults to 127.0.0.1 for security
-- **Sensitive data** - MR diffs may contain proprietary code
-- **Do not expose** to public networks without firewall/VPN
+The API has no authentication and binds to localhost by default. MR diffs may contain proprietary code, so avoid exposing the API on public networks without a firewall or VPN.
 
 ## Development
 
