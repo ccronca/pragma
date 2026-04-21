@@ -13,6 +13,7 @@ Endpoints:
 - GET  /stats        - Database statistics
 """
 
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -91,6 +92,15 @@ class MRDetails(MRSummary):
 
     mr_description: str
     full_content: str
+
+
+class ReviewSummary(BaseModel):
+    """Summary of an AI-generated MR review."""
+
+    repository: str
+    mr_id: int
+    updated_at: Optional[str]
+    review_filename: str
 
 
 class RepositoryInfo(BaseModel):
@@ -572,6 +582,74 @@ async def list_indexed_mrs(
     paginated_mrs = all_unique_mrs[offset : offset + limit]
 
     return paginated_mrs
+
+
+def _resolve_data_dir() -> Path:
+    """Return the project data/ directory regardless of working directory."""
+    current = Path.cwd()
+    for candidate in (current / "data", current.parent / "data"):
+        if candidate.is_dir():
+            return candidate
+    return current / "data"
+
+
+@app.get("/reviews", response_model=list[ReviewSummary])
+async def list_reviews(
+    repository: Optional[str] = Query(
+        None, description="Filter by repository (format: 'owner/name')"
+    ),
+):
+    """List all AI-generated MR reviews saved by the reviewer agent."""
+    data_dir = _resolve_data_dir()
+    state_file = data_dir / "review_state.json"
+
+    if not state_file.exists():
+        return []
+
+    with open(state_file, "r", encoding="utf-8") as f:
+        state = json.load(f)
+
+    reviews = []
+    for repo_key, repo_state in state.get("repositories", {}).items():
+        if repository and repo_key != repository:
+            continue
+        for mr_id, info in repo_state.get("reviewed_mrs", {}).items():
+            if not info.get("review_file"):
+                continue
+            review_path = Path(info["review_file"])
+            reviews.append(
+                ReviewSummary(
+                    repository=repo_key,
+                    mr_id=int(mr_id),
+                    updated_at=info.get("updated_at"),
+                    review_filename=review_path.name,
+                )
+            )
+
+    return sorted(reviews, key=lambda r: r.review_filename, reverse=True)
+
+
+@app.get("/reviews/{review_filename}")
+async def get_review(review_filename: str):
+    """Get the full Markdown content of a specific review file."""
+    data_dir = _resolve_data_dir()
+    review_path = data_dir / "reviews" / review_filename
+
+    # Guard against path traversal
+    try:
+        review_path.resolve().relative_to((data_dir / "reviews").resolve())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid review filename")
+
+    if not review_path.exists():
+        raise HTTPException(
+            status_code=404, detail=f"Review not found: {review_filename}"
+        )
+
+    return {
+        "filename": review_filename,
+        "content": review_path.read_text(encoding="utf-8"),
+    }
 
 
 if __name__ == "__main__":

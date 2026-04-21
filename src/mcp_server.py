@@ -115,6 +115,43 @@ async def list_tools() -> list[Tool]:
                 "properties": {},
             },
         ),
+        Tool(
+            name="list_reviews",
+            description=(
+                "List all AI-generated MR reviews saved by the reviewer agent. "
+                "Returns review metadata including repository, MR ID, and filename. "
+                "Use get_review to fetch the full content of a specific review."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "repository": {
+                        "type": "string",
+                        "description": (
+                            "Filter by repository (format: 'owner/name', "
+                            "e.g. 'product-security/pdm-db')"
+                        ),
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="get_review",
+            description=(
+                "Get the full Markdown content of a specific MR review. "
+                "Use list_reviews first to find the review_filename."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "review_filename": {
+                        "type": "string",
+                        "description": "The review filename (e.g. 'pdm-db_mr42_20260421_120000.md')",
+                    }
+                },
+                "required": ["review_filename"],
+            },
+        ),
     ]
 
 
@@ -145,6 +182,15 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             response = await client.get(f"{PRAGMA_API_URL}/mrs", params=params)
         elif name == "list_repositories":
             response = await client.get(f"{PRAGMA_API_URL}/repositories")
+        elif name == "list_reviews":
+            params = {}
+            if arguments.get("repository"):
+                params["repository"] = arguments["repository"]
+            response = await client.get(f"{PRAGMA_API_URL}/reviews", params=params)
+        elif name == "get_review":
+            response = await client.get(
+                f"{PRAGMA_API_URL}/reviews/{arguments['review_filename']}"
+            )
         else:
             raise ValueError(f"Unknown tool: {name}")
 
