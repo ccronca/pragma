@@ -91,6 +91,7 @@ class GitlabAdapter:
                         "repo_name": self.name,
                         "author": mr.author.get("username", "unknown"),
                         "created_at": mr.created_at,
+                        "updated_at": mr.updated_at,
                         "merged_at": mr.merged_at if hasattr(mr, "merged_at") else None,
                         "web_url": mr.web_url,
                     }
@@ -133,6 +134,7 @@ class GitlabAdapter:
             "repo_name": self.name,
             "author": mr_full.author.get("username", "unknown"),
             "created_at": mr_full.created_at,
+            "updated_at": mr_full.updated_at,
             "merged_at": mr_full.merged_at if hasattr(mr_full, "merged_at") else None,
             "web_url": mr_full.web_url,
         }

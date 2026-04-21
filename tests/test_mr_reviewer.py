@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from agents.mr_reviewer import (
     _build_review_agent,
-    _get_reviewed_mr_ids,
+    _get_mr_review_info,
     _mark_mr_reviewed,
     _notify,
     _save_review,
@@ -81,31 +81,49 @@ class TestNotify:
 
 
 class TestReviewState:
-    def test_get_reviewed_mr_ids_empty_when_no_state_file(self, tmp_path, monkeypatch):
+    def test_get_mr_review_info_none_when_no_state_file(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        result = _get_reviewed_mr_ids("group/repo")
-        assert result == set()
+        assert _get_mr_review_info("group/repo", 42) is None
 
-    def test_mark_mr_reviewed_persists_id(self, tmp_path, monkeypatch):
+    def test_mark_mr_reviewed_persists_info(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        _mark_mr_reviewed("group/repo", 42)
-        result = _get_reviewed_mr_ids("group/repo")
-        assert 42 in result
+        _mark_mr_reviewed("group/repo", 42, "2024-01-02T00:00:00Z", "reviews/r.md")
+        info = _get_mr_review_info("group/repo", 42)
+        assert info is not None
+        assert info["updated_at"] == "2024-01-02T00:00:00Z"
+        assert info["review_file"] == "reviews/r.md"
 
-    def test_mark_mr_reviewed_does_not_duplicate(self, tmp_path, monkeypatch):
+    def test_mark_mr_reviewed_overwrites_on_re_review(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        _mark_mr_reviewed("group/repo", 42)
-        _mark_mr_reviewed("group/repo", 42)
-        result = _get_reviewed_mr_ids("group/repo")
-        assert len([x for x in result if x == 42]) == 1
+        _mark_mr_reviewed("group/repo", 42, "2024-01-01T00:00:00Z", "reviews/v1.md")
+        _mark_mr_reviewed("group/repo", 42, "2024-01-02T00:00:00Z", "reviews/v2.md")
+        info = _get_mr_review_info("group/repo", 42)
+        assert info["updated_at"] == "2024-01-02T00:00:00Z"
+        assert info["review_file"] == "reviews/v2.md"
 
-    def test_reviewed_ids_are_repo_scoped(self, tmp_path, monkeypatch):
+    def test_review_info_is_repo_scoped(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        _mark_mr_reviewed("group/repo-a", 1)
-        _mark_mr_reviewed("group/repo-b", 2)
-        assert 1 in _get_reviewed_mr_ids("group/repo-a")
-        assert 2 not in _get_reviewed_mr_ids("group/repo-a")
-        assert 2 in _get_reviewed_mr_ids("group/repo-b")
+        _mark_mr_reviewed("group/repo-a", 1, "2024-01-01T00:00:00Z", "a/r.md")
+        _mark_mr_reviewed("group/repo-b", 2, "2024-01-01T00:00:00Z", "b/r.md")
+        assert _get_mr_review_info("group/repo-a", 1) is not None
+        assert _get_mr_review_info("group/repo-a", 2) is None
+        assert _get_mr_review_info("group/repo-b", 2) is not None
+
+    def test_migrates_legacy_reviewed_mr_ids_format(self, tmp_path, monkeypatch):
+        import json
+
+        monkeypatch.chdir(tmp_path)
+        state_file = tmp_path / "data" / "review_state.json"
+        state_file.parent.mkdir(parents=True)
+        state_file.write_text(
+            json.dumps({"repositories": {"group/repo": {"reviewed_mr_ids": [10, 20]}}}),
+            encoding="utf-8",
+        )
+        # Legacy MR should be found after migration
+        assert _get_mr_review_info("group/repo", 10) is not None
+        assert _get_mr_review_info("group/repo", 20) is not None
+        # Legacy MR not in list should return None
+        assert _get_mr_review_info("group/repo", 99) is None
 
 
 class TestBuildReviewAgent:

@@ -83,6 +83,68 @@ Non-blocking improvements (numbered list, or "None").
 One paragraph summary of the overall MR quality and recommended action (approve / request changes / needs discussion).
 """
 
+_UPDATE_REVIEW_PROMPT = """\
+## MR Information
+
+**Title:** {title}
+**Author:** {author}
+**Created:** {created_at}
+**URL:** {web_url}
+
+## Description
+
+{description}
+
+## Historical Context from Pragma
+
+{historical_context}
+
+## Current Code Diff
+
+```diff
+{diff}
+```
+
+## Previous Review
+
+{previous_review}
+
+---
+
+This MR has been updated since the previous review above. Please provide an updated review using the same structure, focusing on:
+
+1. Which blocking issues from the previous review have been addressed
+2. Which blocking issues remain unresolved
+3. Any new issues introduced by the update
+
+## Historical Context Summary
+Summarise any relevant patterns or decisions from past MRs (above). If none are relevant, state so briefly.
+
+## Code Analysis
+Review correctness, logic errors, and code quality. Reference specific lines or files.
+
+## Security
+Identify any security vulnerabilities (injection, hardcoded secrets, auth issues, input validation, etc.).
+If none found, confirm explicitly.
+
+## Quality & Maintainability
+Assess readability, naming, duplication, complexity, and adherence to existing patterns.
+
+## Test Coverage
+Are tests included? What critical paths are untested? Suggest specific test cases.
+
+## Recommendations
+
+### Blocking Issues
+List issues that must be fixed before merging (numbered list, or "None").
+
+### Suggestions
+Non-blocking improvements (numbered list, or "None").
+
+### Summary
+One paragraph summary of the overall MR quality, what changed since the previous review, and recommended action (approve / request changes / needs discussion).
+"""
+
 
 def _load_review_state() -> dict:
     """Load review tracking state from disk."""
@@ -99,20 +161,44 @@ def _save_review_state(state: dict) -> None:
         json.dump(state, f, indent=2)
 
 
-def _get_reviewed_mr_ids(repo_key: str) -> set:
-    """Return the set of MR IDs already reviewed for a repository."""
+def _get_mr_review_info(repo_key: str, mr_id: int) -> dict | None:
+    """Return stored review info for an MR, or None if never reviewed.
+
+    Transparently migrates the legacy reviewed_mr_ids list format to the new
+    reviewed_mrs dict format on first access.
+    """
     state = _load_review_state()
     repo_state = state.get("repositories", {}).get(repo_key, {})
-    return set(repo_state.get("reviewed_mr_ids", []))
+
+    # Migrate legacy format: reviewed_mr_ids -> reviewed_mrs
+    if "reviewed_mr_ids" in repo_state and "reviewed_mrs" not in repo_state:
+        repo_state["reviewed_mrs"] = {
+            str(mid): {"updated_at": None, "review_file": None}
+            for mid in repo_state.pop("reviewed_mr_ids")
+        }
+        state["repositories"][repo_key] = repo_state
+        _save_review_state(state)
+
+    return repo_state.get("reviewed_mrs", {}).get(str(mr_id))
 
 
-def _mark_mr_reviewed(repo_key: str, mr_id: int) -> None:
-    """Record that a MR has been reviewed."""
+def _mark_mr_reviewed(
+    repo_key: str, mr_id: int, updated_at: str | None, review_file: str
+) -> None:
+    """Record that an MR has been reviewed, storing its updated_at and review file path."""
     state = _load_review_state()
     repos = state.setdefault("repositories", {})
-    repo_state = repos.setdefault(repo_key, {"reviewed_mr_ids": []})
-    if mr_id not in repo_state["reviewed_mr_ids"]:
-        repo_state["reviewed_mr_ids"].append(mr_id)
+    repo_state = repos.setdefault(repo_key, {})
+
+    # Migrate legacy format in place if present
+    if "reviewed_mr_ids" in repo_state and "reviewed_mrs" not in repo_state:
+        repo_state["reviewed_mrs"] = {
+            str(mid): {"updated_at": None, "review_file": None}
+            for mid in repo_state.pop("reviewed_mr_ids")
+        }
+
+    reviewed_mrs = repo_state.setdefault("reviewed_mrs", {})
+    reviewed_mrs[str(mr_id)] = {"updated_at": updated_at, "review_file": review_file}
     _save_review_state(state)
 
 
@@ -269,13 +355,20 @@ async def _query_pragma_context(
     return "\n".join(lines)
 
 
-async def review_mr(mr: dict, config: dict, pragma_url: str) -> Path:
+async def review_mr(
+    mr: dict,
+    config: dict,
+    pragma_url: str,
+    previous_review_path: Path | None = None,
+) -> Path:
     """Generate an AI review for a single MR and save it to data/reviews/.
 
     Args:
         mr: MR data dict (from GitlabAdapter.fetch_mr or fetch_mrs).
         config: Pragma configuration dict.
         pragma_url: URL of the Pragma API for historical context.
+        previous_review_path: Path to a prior review file. When provided, the
+            update prompt is used so the model can track what was addressed.
 
     Returns:
         Path to the saved review file.
@@ -290,7 +383,7 @@ async def review_mr(mr: dict, config: dict, pragma_url: str) -> Path:
         pragma_url=pragma_url,
     )
 
-    prompt = _REVIEW_PROMPT.format(
+    common_fields = dict(
         title=mr["title"],
         author=mr.get("author", "unknown"),
         created_at=mr.get("created_at", "unknown"),
@@ -299,6 +392,14 @@ async def review_mr(mr: dict, config: dict, pragma_url: str) -> Path:
         diff=(mr.get("diff") or "No diff available.")[:8000],
         historical_context=historical_context,
     )
+
+    if previous_review_path is not None and previous_review_path.exists():
+        previous_review = previous_review_path.read_text(encoding="utf-8")
+        prompt = _UPDATE_REVIEW_PROMPT.format(
+            **common_fields, previous_review=previous_review
+        )
+    else:
+        prompt = _REVIEW_PROMPT.format(**common_fields)
 
     result = await review_agent.run(prompt)
     review_path = _save_review(result.data, mr, repo_key)
@@ -341,8 +442,6 @@ async def run_continuous_review(
             repo_key = f"{repo_owner}/{repo_name}"
 
             try:
-                already_reviewed = _get_reviewed_mr_ids(repo_key)
-
                 adapter = GitlabAdapter(
                     base_url=gitlab_base_url,
                     private_token=gitlab_token,
@@ -350,17 +449,42 @@ async def run_continuous_review(
                     name=repo_name,
                 )
                 open_mrs = adapter.fetch_mrs(state="opened", max_mrs=20)
-                new_mrs = [mr for mr in open_mrs if mr["id"] not in already_reviewed]
+
+                mrs_to_review = []
+                for mr in open_mrs:
+                    review_info = _get_mr_review_info(repo_key, mr["id"])
+                    if review_info is None:
+                        # Never reviewed before
+                        mrs_to_review.append((mr, None))
+                    elif review_info["updated_at"] != mr.get("updated_at"):
+                        # MR has been updated since last review
+                        prev_path = (
+                            Path(review_info["review_file"])
+                            if review_info.get("review_file")
+                            else None
+                        )
+                        mrs_to_review.append((mr, prev_path))
 
                 logger.info(
-                    "Found %d new open MRs to review in %s", len(new_mrs), repo_key
+                    "Found %d MRs to review in %s (%d open total)",
+                    len(mrs_to_review),
+                    repo_key,
+                    len(open_mrs),
                 )
 
-                for mr in new_mrs:
+                for mr, previous_review_path in mrs_to_review:
                     try:
-                        logger.info("Reviewing MR !%d: %s", mr["id"], mr["title"])
-                        review_path = await review_mr(mr, config, pragma_url)
-                        _mark_mr_reviewed(repo_key, mr["id"])
+                        action = "Re-reviewing" if previous_review_path else "Reviewing"
+                        logger.info("%s MR !%d: %s", action, mr["id"], mr["title"])
+                        review_path = await review_mr(
+                            mr, config, pragma_url, previous_review_path
+                        )
+                        _mark_mr_reviewed(
+                            repo_key,
+                            mr["id"],
+                            mr.get("updated_at"),
+                            str(review_path),
+                        )
                         logger.info(
                             "Review complete for MR !%d → %s", mr["id"], review_path
                         )
