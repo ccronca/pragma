@@ -14,6 +14,7 @@ Endpoints:
 """
 
 import json
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -593,6 +594,35 @@ def _resolve_data_dir() -> Path:
     return current / "data"
 
 
+_REVIEW_FILENAME_RE = re.compile(r"^(.+)_mr(\d+)_\d{8}_\d{6}\.md$")
+
+
+def _reviews_from_filesystem(
+    reviews_dir: Path, known_repos: dict[str, str]
+) -> list[ReviewSummary]:
+    """Build ReviewSummary list by scanning the reviews directory.
+
+    Used as a fallback when the state file uses the legacy reviewed_mr_ids format
+    that does not track file paths. known_repos maps repo_name -> repo_key.
+    """
+    summaries = []
+    for path in reviews_dir.glob("*.md"):
+        m = _REVIEW_FILENAME_RE.match(path.name)
+        if not m:
+            continue
+        repo_name, mr_id = m.group(1), int(m.group(2))
+        repo_key = known_repos.get(repo_name, repo_name)
+        summaries.append(
+            ReviewSummary(
+                repository=repo_key,
+                mr_id=mr_id,
+                updated_at=None,
+                review_filename=path.name,
+            )
+        )
+    return summaries
+
+
 @app.get("/reviews", response_model=list[ReviewSummary])
 async def list_reviews(
     repository: Optional[str] = Query(
@@ -601,15 +631,24 @@ async def list_reviews(
 ):
     """List all AI-generated MR reviews saved by the reviewer agent."""
     data_dir = _resolve_data_dir()
+    reviews_dir = data_dir / "reviews"
     state_file = data_dir / "review_state.json"
 
-    if not state_file.exists():
-        return []
+    state = {}
+    if state_file.exists():
+        with open(state_file, "r", encoding="utf-8") as f:
+            state = json.load(f)
 
-    with open(state_file, "r", encoding="utf-8") as f:
-        state = json.load(f)
+    # Build a map from short repo name -> full repo key for filesystem fallback
+    known_repos: dict[str, str] = {}
+    for repo_key in state.get("repositories", {}):
+        short_name = repo_key.rsplit("/", 1)[-1]
+        known_repos[short_name] = repo_key
 
-    reviews = []
+    reviews: list[ReviewSummary] = []
+    seen_filenames: set[str] = set()
+
+    # Prefer structured state (new format with file paths)
     for repo_key, repo_state in state.get("repositories", {}).items():
         if repository and repo_key != repository:
             continue
@@ -617,6 +656,7 @@ async def list_reviews(
             if not info.get("review_file"):
                 continue
             review_path = Path(info["review_file"])
+            seen_filenames.add(review_path.name)
             reviews.append(
                 ReviewSummary(
                     repository=repo_key,
@@ -625,6 +665,15 @@ async def list_reviews(
                     review_filename=review_path.name,
                 )
             )
+
+    # Fall back to filesystem scan for files not tracked in state (legacy format)
+    if reviews_dir.exists():
+        for summary in _reviews_from_filesystem(reviews_dir, known_repos):
+            if summary.review_filename in seen_filenames:
+                continue
+            if repository and summary.repository != repository:
+                continue
+            reviews.append(summary)
 
     return sorted(reviews, key=lambda r: r.review_filename, reverse=True)
 
