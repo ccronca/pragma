@@ -58,7 +58,7 @@ uv run pragma test-connection
 uv run pragma index
 
 # Index a specific repository only
-uv run pragma index --repo pdm-db
+uv run pragma index --repo my-repo
 
 # Start API server
 uv run pragma serve
@@ -73,7 +73,7 @@ uv run pragma serve --reload
 uv run pragma review 42
 
 # Review an MR from a specific repo (overrides config)
-uv run pragma review 42 --repo pdm-db
+uv run pragma review 42 --repo my-repo
 
 # Continuously review new open MRs
 uv run pragma review-watch --interval 60
@@ -182,12 +182,12 @@ Edit `config.yaml` for non-sensitive settings:
 
 ```yaml
 gitlab:
-  base_url: https://gitlab.cee.redhat.com  # Optional, defaults to gitlab.com
+  base_url: https://gitlab.example.com  # Optional, defaults to gitlab.com
 
 repository:
   type: gitlab
-  owner: product-security/pdm  # Can be nested group
-  name: pdm-db
+  owner: my-group/my-subgroup  # Can be nested group
+  name: my-repo
 
 vector_store:
   type: chromadb

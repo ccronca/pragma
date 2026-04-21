@@ -61,7 +61,7 @@ async def list_tools() -> list[Tool]:
                         "type": "string",
                         "description": (
                             "Filter results to a specific repository "
-                            "(format: 'owner/name', e.g. 'product-security/pdm')"
+                            "(format: 'owner/name', e.g. 'my-group/my-repo')"
                         ),
                     },
                 },
@@ -101,7 +101,7 @@ async def list_tools() -> list[Tool]:
                         "type": "string",
                         "description": (
                             "Filter by repository "
-                            "(format: 'owner/name', e.g. 'product-security/pdm')"
+                            "(format: 'owner/name', e.g. 'my-group/my-repo')"
                         ),
                     },
                 },
@@ -129,7 +129,7 @@ async def list_tools() -> list[Tool]:
                         "type": "string",
                         "description": (
                             "Filter by repository (format: 'owner/name', "
-                            "e.g. 'product-security/pdm-db')"
+                            "e.g. 'my-group/my-repo')"
                         ),
                     },
                 },
@@ -146,7 +146,7 @@ async def list_tools() -> list[Tool]:
                 "properties": {
                     "review_filename": {
                         "type": "string",
-                        "description": "The review filename (e.g. 'pdm-db_mr42_20260421_120000.md')",
+                        "description": "The review filename (e.g. 'my-repo_mr42_20260421_120000.md')",
                     }
                 },
                 "required": ["review_filename"],

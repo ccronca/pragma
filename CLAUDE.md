@@ -112,15 +112,12 @@ uv run pragma serve --host 0.0.0.0     # Network access (INSECURE - shows warnin
 
 The `config.yaml` file contains:
 ```yaml
-api_keys:
-  gemini: <GEMINI_API_KEY>
-  gitlab: <GITLAB_PRIVATE_TOKEN>
 gitlab:
-  base_url: https://gitlab.cee.redhat.com  # Optional, defaults to https://gitlab.com
+  base_url: https://gitlab.example.com  # Optional, defaults to https://gitlab.com
 repository:
   type: gitlab
-  owner: <repo_owner_or_group>  # For nested groups: product-security/pdm
-  name: <repo_name>              # Repository name: pdm-db
+  owner: <repo_owner_or_group>  # For nested groups: my-group/my-subgroup
+  name: <repo_name>
 vector_store:
   type: chromadb
   path: ./data/chroma_db
@@ -202,7 +199,7 @@ response = requests.post("http://localhost:8000/search", json={
 similar_mrs = response.json()
 
 # Get specific MR details
-mr = requests.get("http://localhost:8000/mrs/383").json()
+mr = requests.get("http://localhost:8000/mrs/42").json()
 ```
 
 ## Complete Workflow Example
@@ -346,7 +343,7 @@ context is available.
 
 **Drill into a specific MR:**
 ```
-Get the full details of pragma MR !383 including its diff and review discussions.
+Get the full details of pragma MR !42 including its diff and review discussions.
 ```
 
 ### Tips for Better Results

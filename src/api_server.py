@@ -61,7 +61,7 @@ class SearchRequest(BaseModel):
         None,
         description=(
             "Filter results to a specific repository (format: 'owner/name', "
-            "e.g. 'product-security/pdm')"
+            "e.g. 'my-group/my-repo')"
         ),
     )
 
@@ -472,7 +472,7 @@ async def get_mr_details(mr_id: int):
     Example usage (from Python sandbox):
     ```python
     import requests
-    response = requests.get("http://localhost:8000/mrs/383")
+    response = requests.get("http://localhost:8000/mrs/42")
     mr = response.json()
     ```
     """
@@ -513,7 +513,7 @@ async def list_indexed_mrs(
     repository: Optional[str] = Query(
         None,
         description=(
-            "Filter by repository (format: 'owner/name', e.g. 'product-security/pdm')"
+            "Filter by repository (format: 'owner/name', e.g. 'my-group/my-repo')"
         ),
     ),
 ):
