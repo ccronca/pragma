@@ -188,6 +188,8 @@ class PragmaAPI:
             elif (current_dir.parent / chroma_path).exists():
                 chroma_path = str(current_dir.parent / chroma_path)
 
+        self._chroma_path = chroma_path
+
         # Load ChromaDB
         self.chroma_db = chromadb.PersistentClient(path=chroma_path)
         self.chroma_collection = self.chroma_db.get_or_create_collection(
@@ -203,11 +205,13 @@ class PragmaAPI:
         self.initialized = True
 
     def _refresh(self):
-        """Refresh collection and index references after the collection is recreated.
+        """Reinitialize the ChromaDB client and collection after a stale reference.
 
-        Called automatically when a NotFoundError is detected, which happens when
-        'pragma clear-index' is run while the server is active.
+        Called automatically when a NotFoundError is detected. Reinitializes the
+        full PersistentClient (not just the collection) to recover from cases where
+        the client's internal state has become invalid after an indexer write cycle.
         """
+        self.chroma_db = chromadb.PersistentClient(path=self._chroma_path)
         self.chroma_collection = self.chroma_db.get_or_create_collection(
             "pragma_collection"
         )

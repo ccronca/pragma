@@ -300,27 +300,35 @@ async def _query_pragma_context(
         except Exception:
             return "_Pragma API unavailable — no historical context._"
 
-        # Two parallel searches: discussions (natural language) + diffs (code)
+        # Two parallel searches: discussions (natural language) + diffs (code).
+        # On 503 (ChromaDB refresh in progress) retry once after a short delay.
+        async def _search(payload: dict) -> httpx.Response | Exception:
+            try:
+                resp = await client.post(f"{pragma_url}/search", json=payload)
+                if resp.status_code == 503:
+                    await asyncio.sleep(2)
+                    resp = await client.post(f"{pragma_url}/search", json=payload)
+                return resp
+            except Exception as exc:
+                return exc
+
         discussion_response, diff_response = await asyncio.gather(
-            client.post(
-                f"{pragma_url}/search",
-                json={
+            _search(
+                {
                     "query": mr_title,
                     "content_type": "discussion",
                     "top_k": 5,
                     "min_score": 0.5,
-                },
+                }
             ),
-            client.post(
-                f"{pragma_url}/search",
-                json={
+            _search(
+                {
                     "code_diff": mr_diff[:3000],
                     "content_type": "diff",
                     "top_k": 5,
                     "min_score": 0.5,
-                },
+                }
             ),
-            return_exceptions=True,
         )
 
     lines = []
