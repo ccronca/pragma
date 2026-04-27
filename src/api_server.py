@@ -13,6 +13,7 @@ Endpoints:
 - GET  /stats        - Database statistics
 """
 
+import asyncio
 import json
 import re
 from contextlib import asynccontextmanager
@@ -396,7 +397,18 @@ async def search_similar_mrs(request: SearchRequest):
     retriever = pragma_api.index.as_retriever(
         similarity_top_k=request.top_k, filters=filters
     )
-    nodes = retriever.retrieve(query_text)
+
+    # Retry on transient ChromaDB write conflicts (InternalError raised when the
+    # continuous indexer holds the file lock during a write cycle).
+    _max_retries = 3
+    for _attempt in range(_max_retries):
+        try:
+            nodes = retriever.retrieve(query_text)
+            break
+        except chromadb.errors.InternalError:
+            if _attempt == _max_retries - 1:
+                raise
+            await asyncio.sleep(0.5)
 
     results = []
     for node in nodes:
