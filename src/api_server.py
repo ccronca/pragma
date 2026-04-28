@@ -664,9 +664,15 @@ async def list_reviews(
     reviews: list[ReviewSummary] = []
     seen_filenames: set[str] = set()
 
+    # Normalise short repo name (e.g. "pdm-db") to full key ("owner/group/name")
+    # so callers can filter by either form.
+    resolved_repository = (
+        known_repos.get(repository, repository) if repository else None
+    )
+
     # Prefer structured state (new format with file paths)
     for repo_key, repo_state in state.get("repositories", {}).items():
-        if repository and repo_key != repository:
+        if resolved_repository and repo_key != resolved_repository:
             continue
         for mr_id, info in repo_state.get("reviewed_mrs", {}).items():
             if not info.get("review_file"):
@@ -687,7 +693,7 @@ async def list_reviews(
         for summary in _reviews_from_filesystem(reviews_dir, known_repos):
             if summary.review_filename in seen_filenames:
                 continue
-            if repository and summary.repository != repository:
+            if resolved_repository and summary.repository != resolved_repository:
                 continue
             reviews.append(summary)
 
