@@ -369,9 +369,6 @@ async def search_similar_mrs(request: SearchRequest):
     if not pragma_api.initialized:
         pragma_api.initialize()
 
-    if pragma_api.chroma_collection.count() == 0:
-        return []
-
     if not request.query and not request.code_diff:
         raise HTTPException(
             status_code=422, detail="Provide either 'query' or 'code_diff'."
@@ -394,15 +391,17 @@ async def search_similar_mrs(request: SearchRequest):
             metadata_filters.append(MetadataFilter(key="repo_name", value=parts[1]))
     filters = MetadataFilters(filters=metadata_filters) if metadata_filters else None
 
-    retriever = pragma_api.index.as_retriever(
-        similarity_top_k=request.top_k, filters=filters
-    )
-
     # Retry on transient ChromaDB write conflicts (InternalError raised when the
-    # continuous indexer holds the file lock during a write cycle).
+    # continuous indexer holds the file lock during a write cycle). Wraps both
+    # count() and retrieve() since either can fail during a concurrent write.
     _max_retries = 3
     for _attempt in range(_max_retries):
         try:
+            if pragma_api.chroma_collection.count() == 0:
+                return []
+            retriever = pragma_api.index.as_retriever(
+                similarity_top_k=request.top_k, filters=filters
+            )
             nodes = retriever.retrieve(query_text)
             break
         except chromadb.errors.InternalError:
