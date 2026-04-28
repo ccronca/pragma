@@ -394,7 +394,8 @@ async def search_similar_mrs(request: SearchRequest):
     # Retry on transient ChromaDB write conflicts (InternalError raised when the
     # continuous indexer holds the file lock during a write cycle). Wraps both
     # count() and retrieve() since either can fail during a concurrent write.
-    _max_retries = 3
+    # 10 retries × 1 s gives a ~10 s window, enough to outlast a full index cycle.
+    _max_retries = 10
     for _attempt in range(_max_retries):
         try:
             if pragma_api.chroma_collection.count() == 0:
@@ -407,7 +408,7 @@ async def search_similar_mrs(request: SearchRequest):
         except chromadb.errors.InternalError:
             if _attempt == _max_retries - 1:
                 raise
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1.0)
 
     results = []
     for node in nodes:
